@@ -1,0 +1,50 @@
+# FastAPI & Server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart==0.0.6
+sse-starlette==2.0.0
+
+# Anthropic Claude API
+anthropic>=0.43.0
+
+# LangChain & LangGraph
+langchain==0.1.5
+langgraph==0.0.20
+langchain-community==0.0.17
+
+# HTTP Client
+httpx==0.26.0
+aiohttp==3.9.3
+
+# Algorand SDK
+py-algorand-sdk>=2.6.0
+
+# Database
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Vector Store (RAG)
+chromadb==0.4.22
+
+# Embeddings (local, free)
+sentence-transformers>=2.2.0
+
+# Keep PyNaCl for Algorand ed25519 compatibility
+PyNaCl>=1.5.0
+
+# Web Scraping (for docs indexing)
+beautifulsoup4==4.12.3
+playwright==1.41.0
+markdownify==0.11.6
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.6.0
+pydantic-settings==2.1.0
+
+# Development
+pytest==8.0.0
+pytest-asyncio==0.23.5
+black==24.1.1
+ruff==0.1.14
