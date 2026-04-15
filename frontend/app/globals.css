@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #0a0a0f;
+    --foreground: #e5e7eb;
+    --surface: #111118;
+    --surface-2: #1a1a24;
+    --muted: #6b7280;
+    --border-color: #2a2a3a;
+    --shadow-color: rgba(0, 0, 0, 0.5);
+
+    /* Accent palette */
+    --nb-gold: #f59e0b;
+    --nb-gold-dim: #d97706;
+    --nb-navy: #3b82f6;
+    --nb-lilac: #8b5cf6;
+    --nb-teal: #14b8a6;
+    --nb-green: #22c55e;
+    --nb-amber: #f59e0b;
+    --nb-red: #ef4444;
+
+    --gradient-start: #f59e0b;
+    --gradient-end: #fbbf24;
+    
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    /* Since we are dark-only, these are the same as :root */
+    --background: #0a0a0f;
+    --foreground: #e5e7eb;
+    --surface: #111118;
+    --surface-2: #1a1a24;
+    --muted: #6b7280;
+    --border-color: #2a2a3a;
+    --shadow-color: rgba(0, 0, 0, 0.5);
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--border-color);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    @apply antialiased;
+  }
+}
+
+/* Custom styles for ai-prompt-box */
+*:focus-visible {
+  outline-offset: 0 !important;
+  --ring-offset: 0 !important;
+}
+
+textarea::-webkit-scrollbar {
+  width: 6px;
+}
+
+textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+textarea::-webkit-scrollbar-thumb {
+  background-color: #444444;
+  border-radius: 3px;
+}
+
+textarea::-webkit-scrollbar-thumb:hover {
+  background-color: #555555;
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow utilities */
+.glow-gold {
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.15), 0 0 60px rgba(245, 158, 11, 0.05);
+}
+
+.glow-gold-sm {
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.12), 0 0 30px rgba(245, 158, 11, 0.06);
+}
+
+/* Button press interaction */
+.btn-press {
+  @apply transition-all active:scale-[0.98] hover:-translate-y-0.5;
+}
+
+/* Custom scrollbar for global */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--nb-gold);
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
