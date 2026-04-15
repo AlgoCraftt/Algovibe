@@ -257,7 +257,8 @@ export interface SuggestedProtocol {
  */
 export async function fetchProtocols(category?: string): Promise<Protocol[]> {
   try {
-    const url = new URL(`${API_URL}/api/v1/protocols`)
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
+    const url = new URL(`${API_URL}/api/v1/protocols`, baseUrl)
     if (category) url.searchParams.set('category', category)
     const response = await fetch(url.toString())
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
