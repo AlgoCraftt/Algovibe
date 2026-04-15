@@ -70,4 +70,5 @@ coverage/
 .claude/
 connect-wallet-starter-v2/
 *.md
+!README.md
 tmp/
