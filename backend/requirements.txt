@@ -25,18 +25,13 @@ asyncpg==0.29.0
 alembic==1.13.1
 
 # Vector Store (RAG)
-chromadb==0.4.22
 
 # Embeddings (local, free)
-sentence-transformers>=2.2.0
 
 # Keep PyNaCl for Algorand ed25519 compatibility
 PyNaCl>=1.5.0
 
 # Web Scraping (for docs indexing)
-beautifulsoup4==4.12.3
-playwright==1.41.0
-markdownify==0.11.6
 
 # Utilities
 python-dotenv==1.0.1
