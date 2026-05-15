@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAlgoCraftStore } from '@/lib/store'
 import { SandpackPreview } from './SandpackPreview'
 import { FileTree } from './FileTree'
@@ -52,10 +52,10 @@ export function PreviewPanel() {
     setIsDirty(false)
   }
 
-  const handleDirtyChange = (dirty: boolean, files: Record<string, string>) => {
+  const handleDirtyChange = useCallback((dirty: boolean, files: Record<string, string>) => {
     setIsDirty(dirty)
     setDirtyFiles(files)
-  }
+  }, [])
 
   const hasFiles = Object.keys(generatedFiles).length > 0
   const isBuilding = buildStatus !== 'idle' && buildStatus !== 'complete' && buildStatus !== 'error'

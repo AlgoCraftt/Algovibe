@@ -95,14 +95,103 @@ RIGHT:  import { clone } from '@algorandfoundation/algorand-typescript'
 clone() IS a valid export from the algorand-typescript package.""",
     ),
     (
-        re.compile(r"number.*is not assignable|number.*not.*uint64|infer.*number", re.IGNORECASE),
+        re.compile(r"number.*is not assignable|number.*not.*uint64|infer.*number|`number` is not valid", re.IGNORECASE),
         "JavaScript number literal",
         """CORRECTION — Never use raw JavaScript number literals:
 WRONG:  const amount = 100
 WRONG:  counter + 1
+WRONG:  const total = this.a.value + this.b.value  (inferred as number)
 RIGHT:  const amount: uint64 = Uint64(100)
         counter + Uint64(1)
-Always explicitly type arithmetic results as uint64.""",
+        const total: uint64 = this.a.value + this.b.value
+Always explicitly annotate arithmetic results as uint64.""",
+    ),
+    (
+        re.compile(r"createApplication\s*\([^)]+\)|invalid ApplicationArgs index", re.IGNORECASE),
+        "createApplication with arguments",
+        """CORRECTION — createApplication() must have ZERO arguments:
+WRONG:  public createApplication(betAmount: uint64, deadline: uint64): void
+WRONG:  public createApplication(param: uint64): void
+RIGHT:  public createApplication(): void {
+          // set defaults here
+          this.betAmount.value = Uint64(0)
+        }
+        @abimethod()
+        public initialize(betAmount: uint64, deadline: uint64): void {
+          // accept config args in a separate abimethod
+        }
+createApplication() is a lifecycle method — it CANNOT accept arguments. Move all params to a separate @abimethod() initialize() call.""",
+    ),
+    (
+        re.compile(r"Account\.zeroAddress|Property 'zeroAddress' does not exist", re.IGNORECASE),
+        "Account.zeroAddress",
+        """CORRECTION — Account.zeroAddress does not exist:
+WRONG:  this.owner.value = Account.zeroAddress
+WRONG:  assert(this.bettor.value === Account.zeroAddress)
+RIGHT:  Use a boolean flag instead:
+        joined = GlobalState<boolean>({ key: 'j' })
+        this.joined.value = false
+        assert(!this.joined.value, 'Already joined')
+OR store as bytes and check empty:
+        owner = GlobalState<bytes>({ key: 'o' })
+        this.owner.value = Bytes()
+        assert(this.owner.value === Bytes(), 'Already set')""",
+    ),
+    (
+        re.compile(r"This expression is not callable|latestTimestamp\(\)|sender\(\)|amount\(\)|receiver\(\)", re.IGNORECASE),
+        "Transaction/Global fields called as functions",
+        """CORRECTION — Transaction and Global fields are PROPERTIES, not functions:
+WRONG:  Global.latestTimestamp()   → RIGHT: Global.latestTimestamp
+WRONG:  payment.sender()           → RIGHT: payment.sender
+WRONG:  payment.amount()           → RIGHT: payment.amount
+WRONG:  payment.receiver()         → RIGHT: payment.receiver
+WRONG:  Txn.sender()               → RIGHT: Txn.sender
+Never call these with parentheses — they are property accessors.""",
+    ),
+    (
+        re.compile(r"unreachable code", re.IGNORECASE),
+        "unreachable code after assert/return",
+        """CORRECTION — Unreachable code after assert or early return:
+Puya treats assert() as an unconditional abort when it fails — any code after it in the same
+branch is unreachable. Also, a method with a non-void return type must NOT have a bare
+`return Uint64(0)` after an assert that already guarantees the value.
+
+WRONG:
+  @abimethod()
+  public getWinner(): uint64 {
+    assert(this.votingEnded.value, 'Voting not ended')
+    return this.winner.value   // ← unreachable if assert aborts
+  }
+
+RIGHT — restructure so the return is always reachable:
+  @abimethod()
+  public getWinner(): uint64 {
+    assert(this.votingEnded.value, 'Voting not ended')
+    const w: uint64 = this.winner.value
+    return w
+  }
+
+WRONG (dummy return to satisfy TS):
+  assert(condition)
+  return Uint64(0)  // ← unreachable, Puya rejects this
+
+RIGHT — never add a dummy return after assert. If the method is void, omit the return.
+If the method returns a value, assign it to a local variable BEFORE the assert, then return it after.""",
+    ),
+    (
+        re.compile(r"Not Supported: Throw statements|throw new Error|throw Error", re.IGNORECASE),
+        "throw statements not supported",
+        """CORRECTION — Puya does NOT support throw statements:
+WRONG:  throw new Error('message')
+WRONG:  throw Error()
+WRONG:  throw new Error()  // used as a fake return to satisfy TypeScript
+
+RIGHT — use assert() to abort execution with a message:
+  assert(false, 'message')   // aborts unconditionally with a message
+  assert(condition, 'error message')
+
+Never use throw in Algorand TypeScript. Replace ALL throw statements with assert(false, 'reason').
+Do NOT add any code after assert(false, ...) — it is unreachable.""",
     ),
 ]
 
@@ -157,7 +246,15 @@ BANNED — The compiler will REJECT these. Never write them:
 ❌ GlobalState<bool>           → use GlobalState<boolean>
 ❌ Txn.objectsInner            → use gtxn.PaymentTxn(Uint64(n)) for group access
 ❌ const amount = 100          → use const amount: uint64 = Uint64(100)
+❌ createApplication(args...)  → lifecycle methods take ZERO args, use a separate @abimethod() initialize()
+❌ Account.zeroAddress         → does not exist, use a boolean flag instead
+❌ Global.latestTimestamp()    → it is a property, write Global.latestTimestamp (no parentheses)
+❌ payment.sender()            → properties not functions: payment.sender, payment.amount, payment.receiver
+❌ @abimethod() on optInToApplication, closeOutOfApplication, updateApplication, deleteApplication → these are lifecycle methods, NO decorator needed
+❌ public opt_in() or public optIn() as @abimethod → use the lifecycle convention: public optInToApplication(): void
 ❌ import external npm packages into contract code
+❌ throw new Error() or throw Error() → Puya does NOT support throw. Use assert(false, 'reason') instead
+❌ unreachable return after assert → NEVER write `assert(...); return Uint64(0)`. If a method returns a value, assign it to a local variable BEFORE the assert, then return it after the assert
 
 LIFECYCLE CONVENTIONS (use these named methods — no decorator needed):
   createApplication()   → called on app creation (OnCompletion = NoOp + isCreate)
@@ -202,6 +299,37 @@ export class AssetMinter extends Contract {
 }
 ```
 
+VERIFIED EXAMPLE 3 (assert then return — correct pattern):
+```typescript
+import { Contract, GlobalState, abimethod, uint64, Uint64, assert } from '@algorandfoundation/algorand-typescript'
+
+export class Voting extends Contract {
+  winner = GlobalState<uint64>({ key: 'w' })
+  ended = GlobalState<boolean>({ key: 'e' })
+
+  public createApplication(): void {
+    this.winner.value = Uint64(0)
+    this.ended.value = false
+  }
+
+  // CORRECT: assign to local var BEFORE assert, return AFTER
+  @abimethod()
+  public getWinner(): uint64 {
+    const w: uint64 = this.winner.value   // ← read value first
+    assert(this.ended.value, 'Voting not ended')  // ← then assert
+    return w                               // ← return is always reachable
+  }
+
+  // CORRECT: void method with assert — no return needed
+  @abimethod()
+  public endVoting(): void {
+    assert(!this.ended.value, 'Already ended')
+    this.ended.value = true
+    // NO return statement needed for void
+  }
+}
+```
+
 Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation, no markdown fence.""",
         },
     }
@@ -238,6 +366,36 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
             # Ensure Global.latestTimestamp - last_update results in uint64
             code = re.sub(r'const (\w+) = Global\.latestTimestamp - (\w+)', 
                          r'const \1: uint64 = Global.latestTimestamp - \2', code)
+
+            # 5. Strip args from createApplication — it must be a zero-arg lifecycle method
+            code = re.sub(r'public createApplication\s*\([^)]+\)', 'public createApplication()', code)
+
+            # 6. Remove throw statements — replace with assert(false, 'error')
+            def _replace_throw(m: re.Match) -> str:
+                arg = m.group(1).strip() if m.group(1).strip() else "'error'"
+                return f"assert(false, {arg})"
+            code = re.sub(r'throw new Error\(([^)]*)\)', _replace_throw, code)
+            code = re.sub(r'throw Error\(([^)]*)\)', _replace_throw, code)
+            code = re.sub(r'throw new Error\b', "assert(false, 'error')", code)
+
+            # 7. Remove unreachable dummy returns after assert(false, ...)
+            # Pattern: assert(false, ...) followed immediately by return <expr>
+            code = re.sub(r"(assert\(false[^)]*\))\s*\n(\s*return [^\n]+)", r"\1", code)
+
+            # 8. Remove bare `return Uint64(0)` or `return Bytes()` lines that follow an assert line
+            # (heuristic: if the previous non-empty line is an assert(), the return is unreachable)
+            lines = code.split('\n')
+            cleaned = []
+            prev_was_assert = False
+            for line in lines:
+                stripped = line.strip()
+                if prev_was_assert and re.match(r'return\s+', stripped):
+                    # skip the unreachable return
+                    prev_was_assert = False
+                    continue
+                cleaned.append(line)
+                prev_was_assert = bool(re.match(r'assert\s*\(', stripped))
+            code = '\n'.join(cleaned)
 
         return code
 

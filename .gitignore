@@ -69,5 +69,6 @@ coverage/
 # ── Misc ─────────────────────────────────────────────────────────────────────
 .claude/
 connect-wallet-starter-v2/
+backend/knowledge/algorand-agent-skills/
 *.md
 tmp/

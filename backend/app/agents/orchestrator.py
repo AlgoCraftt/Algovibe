@@ -366,14 +366,18 @@ async def run_pipeline(
     )
     
     state.update({
-        "template_type": analyze_res["template_type"],
-        "contract_spec": analyze_res["contract_spec"],
+        "template_type": analyze_res.get("template_type", ""),
+        "contract_spec": analyze_res.get("contract_spec", {}),
         "contract_docs": contract_docs_res["contract_docs"],
         "sdk_docs": sdk_docs_res["sdk_docs"],
     })
     
     for event in analyze_res["events"] + contract_docs_res["events"]:
         yield event
+
+    if analyze_res.get("error"):
+        yield {"step": "error", "message": analyze_res["error"]}
+        return
         
     if state.get("error"):
         yield {"step": "error", "message": state["error"]}

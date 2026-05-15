@@ -232,43 +232,37 @@ function SandpackFileWatcher({
 }) {
   const { sandpack } = useSandpack();
   const { files: currentFiles } = sandpack;
+  const onDirtyChangeRef = React.useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
+  const prevDirtyRef = React.useRef<boolean | null>(null);
 
   React.useEffect(() => {
-    if (!onDirtyChange) return;
+    if (!onDirtyChangeRef.current) return;
 
-    // Convert internal sandpack files to simple record
+    const filesRecord = currentFiles as Record<string, { code: string }>;
     const simpleFiles: Record<string, string> = {};
     let isDirty = false;
 
-    // Type casting because Sandpack types are sometimes tricky in local environments
-    const filesRecord = currentFiles as Record<string, { code: string }>;
-
     for (const [path, file] of Object.entries(filesRecord)) {
-      // Remove leading slash if it exists in Sandpack but not in initialFiles
       const originalPath = initialFiles[path] !== undefined ? path : path.replace(/^\//, '');
       const contentInSandpack = file.code;
       const initialContent = initialFiles[originalPath] !== undefined ? initialFiles[originalPath] : initialFiles[path];
-      
-      // Use the original path so we don't accidentally rename keys when saving
-      if (initialFiles[originalPath] !== undefined) {
-         simpleFiles[originalPath] = contentInSandpack;
-      } else {
-         simpleFiles[path] = contentInSandpack;
-      }
-      
-      // Check if this file exists and is different from initial
+      simpleFiles[originalPath !== undefined && initialFiles[originalPath] !== undefined ? originalPath : path] = contentInSandpack;
       if (initialContent !== undefined && initialContent !== contentInSandpack) {
         isDirty = true;
       }
     }
 
-    // Also check for new files
     if (!isDirty && Object.keys(simpleFiles).length !== Object.keys(initialFiles).length) {
       isDirty = true;
     }
 
-    onDirtyChange(isDirty, simpleFiles);
-  }, [currentFiles, initialFiles, onDirtyChange]);
+    // Only call if dirty state actually changed to avoid infinite loop
+    if (prevDirtyRef.current !== isDirty) {
+      prevDirtyRef.current = isDirty;
+      onDirtyChangeRef.current(isDirty, simpleFiles);
+    }
+  }, [currentFiles, initialFiles]);
 
   return null;
 }

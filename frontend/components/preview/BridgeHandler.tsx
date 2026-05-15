@@ -42,8 +42,8 @@ export function BridgeHandler() {
           handleReadState(event.source!, data)
           break
 
+        case 'OPT_IN':
         case 'CALL_METHOD':
-          // Require user confirmation for any transaction
           setPendingRequest({ request: data, source: event.source! })
           break
 
@@ -68,7 +68,7 @@ export function BridgeHandler() {
   }
 
   const handleReadState = async (source: MessageEventSource, request: BridgeRequest) => {
-    const { appId } = request.payload as ReadStatePayload
+    const { appId, address } = request.payload as ReadStatePayload
     try {
       const appInfo = await algodClient.getApplicationByID(Number(appId)).do()
       const globalStateRaw = (appInfo.params as any)['global-state'] || []
@@ -78,17 +78,71 @@ export function BridgeHandler() {
       globalStateRaw.forEach((item: any) => {
         const key = Buffer.from(item.key, 'base64').toString()
         const val = item.value
-        if (val.type === 1) { // Bytes
-          state[key] = val.bytes // Keep as base64 or decode if possible
-        } else { // Uint
+        if (val.type === 1) {
+          state[key] = val.bytes
+        } else {
           state[key] = val.uint
         }
       })
+
+      // Decode local state if address provided
+      if (address) {
+        try {
+          const accountInfo = await algodClient.accountInformation(address).do()
+          const appsLocalState = (accountInfo as any)['apps-local-state'] || []
+          const appLocal = appsLocalState.find((a: any) => a.id === Number(appId))
+          if (appLocal) {
+            state['__opted_in__'] = true
+            const localKV = appLocal['key-value'] || []
+            localKV.forEach((item: any) => {
+              const key = Buffer.from(item.key, 'base64').toString()
+              const val = item.value
+              state[`local:${key}`] = val.type === 1 ? val.bytes : val.uint
+            })
+          } else {
+            state['__opted_in__'] = false
+          }
+        } catch {
+          state['__opted_in__'] = false
+        }
+      }
 
       sendResponse(source, request.id, state)
     } catch (err: any) {
       sendResponse(source, request.id, null, err.message)
     }
+  }
+
+  // Helper: send an OptIn transaction, including the ABI selector if optInToApplication is an ABI method
+  const sendOptInTransaction = async (
+    appId: number,
+    methods: any[],
+    contractName: string,
+    params: any
+  ) => {
+    const OPT_IN_METHOD_NAMES = ['optInToApplication', 'opt_in_to_application', 'optIn', 'opt_in']
+    const optInMethodDef = methods.find((m: any) => OPT_IN_METHOD_NAMES.includes(m.name))
+
+    let appArgs: Uint8Array[] | undefined = undefined
+    if (optInMethodDef) {
+      // Contract has optInToApplication as an ABI method — must include selector
+      const contract = new algosdk.ABIContract({ name: contractName, methods })
+      const method = contract.getMethodByName(optInMethodDef.name)
+      appArgs = [method.getSelector()]
+    }
+
+    const txn = algosdk.makeApplicationOptInTxnFromObject({
+      sender: activeAddress as string,
+      appIndex: appId,
+      suggestedParams: params,
+      appArgs,
+    })
+    const signed = await transactionSigner([txn], [0])
+    const resp = await algodClient.sendRawTransaction(signed[0]).do()
+    const txId = (resp as any).txId || (resp as any).txid || ''
+    if (!txId) throw new Error('OptIn transaction submitted but no TX ID returned')
+    await algosdk.waitForConfirmation(algodClient, txId, 10)
+    return txId
   }
 
   const executeCallMethod = async () => {
@@ -103,14 +157,46 @@ export function BridgeHandler() {
     try {
       const params = await algodClient.getTransactionParams().do()
 
-      // 1. Build ABI Method Call
-      if (!arc32Spec) throw new Error("Contract specification is missing. Please redeploy.")
+      // Always read fresh from store to avoid stale closure
+      const freshSpec = useAlgoCraftStore.getState().arc32Spec
+      if (!freshSpec) throw new Error('Contract specification is missing. Please redeploy.')
 
-      const methods = arc32Spec.contract?.methods || arc32Spec.methods
-      const contractName = arc32Spec.contract?.name || arc32Spec.name || 'Contract'
-      if (!methods) throw new Error("No methods found in contract specification")
+      const methods = freshSpec.contract?.methods || freshSpec.methods
+      const contractName = freshSpec.contract?.name || freshSpec.name || 'Contract'
+      if (!methods) throw new Error('No methods found in contract specification')
+
+      console.log('[BridgeHandler] arc32Spec methods:', methods.map((m: any) => m.name))
+      console.log('[BridgeHandler] Calling method:', payload.method, 'args:', payload.args)
+
+      // Route all opt-in variants to a proper OptIn transaction
+      const OPT_IN_NAMES = new Set(['__optIn__', 'opt_in', 'optIn', 'opt_in_to_application', 'optInToApplication'])
+      if (OPT_IN_NAMES.has(payload.method)) {
+        const txId = await sendOptInTransaction(Number(payload.appId), methods, contractName, params)
+        setSuccessTxId(txId)
+        sendResponse(source, request.id, { txId, success: true })
+        setTimeout(() => handleCancel(), 3000)
+        return
+      }
 
       const contract = new algosdk.ABIContract({ name: contractName, methods })
+
+      // Auto opt-in silently before method call if contract has local state
+      const hasOptInMethod = methods.some((m: any) =>
+        ['optInToApplication', 'opt_in_to_application', 'optIn', 'opt_in'].includes(m.name)
+      )
+      if (hasOptInMethod) {
+        try {
+          const accountInfo = await algodClient.accountInformation(activeAddress as string).do()
+          const appsLocalState = (accountInfo as any)['apps-local-state'] || []
+          const isOptedIn = appsLocalState.some((a: any) => a.id === Number(payload.appId))
+          if (!isOptedIn) {
+            await sendOptInTransaction(Number(payload.appId), methods, contractName, params)
+          }
+        } catch {
+          // proceed anyway — contract will reject if truly needed
+        }
+      }
+
       const method = contract.getMethodByName(payload.method)
 
       // 1.5 Validate arguments against ABI
@@ -135,17 +221,31 @@ export function BridgeHandler() {
       // 2. Prepare arguments
       const appArgs: Uint8Array[] = [method.getSelector()]
 
-      // Basic ABI encoding for simple types (DApp demo focus)
       payload.args.forEach((arg, i) => {
         const argSpec = method.args[i]
-        // This is a simplification — for the demo we'll handle common types
-        // In full production, use algosdk's proper encoding
-        if (argSpec.type.toString() === 'uint64') {
+        const typeStr = argSpec.type.toString()
+        if (typeStr === 'uint64' || typeStr.startsWith('uint')) {
           appArgs.push(algosdk.encodeUint64(BigInt(arg)))
-        } else if (argSpec.type.toString() === 'string') {
-          appArgs.push(new TextEncoder().encode(arg))
+        } else if (typeStr === 'bool') {
+          appArgs.push(algosdk.encodeUint64(BigInt(arg ? 1 : 0)))
+        } else if (typeStr === 'address' || typeStr === 'Account') {
+          try {
+            appArgs.push(algosdk.decodeAddress(String(arg)).publicKey)
+          } catch {
+            appArgs.push(new TextEncoder().encode(String(arg)))
+          }
+        } else if (typeStr === 'string') {
+          const encoded = new TextEncoder().encode(String(arg))
+          // ABI string encoding: 2-byte length prefix
+          const lenBuf = new Uint8Array(2)
+          new DataView(lenBuf.buffer).setUint16(0, encoded.length)
+          const full = new Uint8Array(2 + encoded.length)
+          full.set(lenBuf)
+          full.set(encoded, 2)
+          appArgs.push(full)
+        } else if (typeStr === 'bytes' || typeStr.startsWith('byte[')) {
+          appArgs.push(new TextEncoder().encode(String(arg)))
         } else {
-          // Fallback for others
           appArgs.push(new TextEncoder().encode(String(arg)))
         }
       })
@@ -159,7 +259,7 @@ export function BridgeHandler() {
         suggestedParams: params,
       })
 
-      // 4. Handle Payment (Wow Factor: Atomic Groups)
+      // 4. Handle Payment atomic group — payment MUST come before app call (index 0)
       let txns = [txn]
       if (payload.payment) {
         const payTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
@@ -168,6 +268,7 @@ export function BridgeHandler() {
           amount: payload.payment.amount,
           suggestedParams: params,
         })
+        // payment at index 0, app call at index 1 — matches gtxn.PaymentTxn(Uint64(0))
         txns = [payTxn, txn]
         algosdk.assignGroupID(txns)
       }
@@ -253,7 +354,7 @@ export function BridgeHandler() {
               </p>
               <div className="pt-4 flex flex-col gap-2">
                 <a
-                  href={`https://lora.algokit.io/testnet/application/${successTxId}`}
+                  href={`https://lora.algokit.io/testnet/transaction/${successTxId}`}
                   target="_blank"
                   className="flex items-center justify-center gap-2 rounded-xl bg-nb-green/10 px-4 py-3 text-xs font-bold text-nb-green border border-nb-green/20"
                 >
@@ -269,9 +370,13 @@ export function BridgeHandler() {
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-xl font-black uppercase tracking-tight text-foreground">Authorize Action</h3>
+                <h3 className="text-xl font-black uppercase tracking-tight text-foreground">
+                  {callPayload.method === '__optIn__' ? 'Opt In to App' : 'Authorize Action'}
+                </h3>
                 <p className="text-xs text-muted font-bold">
-                  The DApp is requesting to call <span className="text-nb-gold">@{callPayload.method}</span>.
+                  {callPayload.method === '__optIn__'
+                    ? 'This will opt your wallet into the smart contract, enabling local state storage.'
+                    : <>The DApp is requesting to call <span className="text-nb-gold">@{callPayload.method}</span>.</>}
                 </p>
               </div>
 

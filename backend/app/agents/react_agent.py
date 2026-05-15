@@ -20,49 +20,145 @@ class ReactGenerationResult(TypedDict):
 class ReactGenerationError(Exception):
     pass
 
-REACT_AGENT_SYSTEM_PROMPT = """You are a Senior Frontend Engineer at AlgoCraft, specialized in premium Algorand blockchain applications. You generate HIGH-FIDELITY App.tsx for Algorand DApps.
+REACT_AGENT_SYSTEM_PROMPT = """You are a Senior Frontend Engineer at AlgoCraft building VISUALLY STUNNING Algorand DApp UIs.
 
-STRATEGIC UI PLANNING:
-Your code MUST start with a `// UI STRATEGY` comment block that explains:
-1.  How the contract state is mapped to the dashboard.
-2.  How each method (from the specification) is represented as an interactive action.
-3.  The layout choice (e.g. Dashboard with metrics + Actions grid).
+You generate a single complete App.tsx file. The UI must look like a premium Web3 product — NOT a text list.
 
-AESTHETIC GUIDELINES (AlgoCraft Premium):
--   Theme: Midnight Blue (#0f172a) and Golden Amber (#f59e0b).
--   Layout: Center-focused dashboard with a glassmorphism feel.
--   Elements: Use gradients, subtle borders, and consistent grouping.
--   Icons: Use `lucide-react` for ALL primary actions (e.g. `Wallet`, `PlusCircle`, `ArrowUpRight`, `Lock`).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANDATORY IMPORTS (always include these exactly):
+```
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useContract, APP_ID } from './hooks/useContract';
+import { useAlgorand } from './hooks/useAlgorand';
+import './index.css';
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-TECHNICAL STACK:
--   React (hooks: useState, useEffect, useCallback)
--   @txnlab/use-wallet (useWallet hook for address/signer)
--   algosdk (Algodv2 for client-side state)
--   Custom external hook: `useAlgorand()` which provides `{ callMethod, loading, error, success }`.
+VISUAL DESIGN RULES — these are NON-NEGOTIABLE:
+1. Use INLINE STYLES everywhere (no className-only approach). The CSS file provides base styles but inline styles drive the layout.
+2. Layout: Full-page dark dashboard. Top navbar with app name + wallet address pill. Main content in a centered max-width container.
+3. Stats row: Render ALL global state values as glowing metric cards (dark bg, amber border, large number, label below).
+4. Action cards: Each contract method gets its own card with a colored header, input fields, and a styled button.
+5. Colors: background #0f172a, card bg #1e293b, accent #f59e0b, text white, muted #94a3b8.
+6. Spacing: generous padding (1.5rem+), rounded corners (1rem+), subtle box-shadows.
+7. Buttons: amber background (#f59e0b), black text, bold, full-width, rounded, hover effect via onMouseEnter/onMouseLeave state.
+8. Status feedback: Show loading spinner (inline CSS animation), success (green), error (red) inside each action card.
 
-RULES:
--   Import: `import { useState, useEffect, useCallback } from 'react'`, `import { useWallet } from '@txnlab/use-wallet'`, `import { useContract } from './hooks/useContract'`, `import './index.css'`, `import { Wallet, Info, CheckCircle, AlertCircle } from 'lucide-react'`
--   API: YOU MUST IMPORT AND USE `useContract()` from `./hooks/useContract`. NEVER call callMethod directly.
--   State Reading: Use `readState()` from `useContract()` to fetch on-chain state. Call it after any successful transaction.
--   Usage Example 1 (Voting):
-    ```tsx
-    const { castVote, readState, loading, error, success } = useContract();
-    const handleVote = async (name: string) => {
-        await castVote(name);
-        await readState(); // Refresh dashboard
-    };
-    ```
--   Usage Example 2 (Counter):
-    ```tsx
-    const { increment, readState, loading } = useContract();
-    const handleIncrement = async () => {
-        await increment();
-        await readState();
-    };
-    ```
--   Wallet Check: Never allow contract calls if `!activeAddress`. Show a "Connect Wallet" state in the hero section.
+STRUCTURE TO FOLLOW:
+```
+export default function App() {
+  const { activeAddress } = useAlgorand();
+  const { method1, method2, readState, loading, error, success } = useContract();
+  const [contractState, setContractState] = useState<any>({});
+  // ... input state for each method
 
-Output ONLY the complete TypeScript/JSX code (no markdown)."""
+  useEffect(() => {
+    readState().then(setContractState).catch(() => {});
+  }, []);
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#0f172a', color: 'white', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      {/* NAVBAR */}
+      <nav style={{ borderBottom: '1px solid #1e293b', padding: '1rem 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontWeight: 800, fontSize: '1.25rem', color: '#f59e0b' }}>AppName</span>
+        <span style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '2rem', padding: '0.4rem 1rem', fontSize: '0.8rem', color: '#94a3b8' }}>
+          {activeAddress ? activeAddress.slice(0,6) + '...' + activeAddress.slice(-4) : 'Not connected'}
+        </span>
+      </nav>
+
+      <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1rem' }}>
+        {/* HERO */}
+        <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
+          <h1 style={{ fontSize: '2.5rem', fontWeight: 900, background: 'linear-gradient(to right, #fff, #f59e0b)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: '0.5rem' }}>App Title</h1>
+          <p style={{ color: '#94a3b8' }}>Description</p>
+        </div>
+
+        {/* STATS ROW — one card per global state value */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
+          <div style={{ background: '#1e293b', border: '1px solid #f59e0b33', borderRadius: '1rem', padding: '1.5rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: '#f59e0b' }}>{contractState.someValue ?? '—'}</div>
+            <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '0.25rem' }}>LABEL</div>
+          </div>
+        </div>
+
+        {/* ACTION CARDS — one per method */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
+          <div style={{ background: '#1e293b', borderRadius: '1rem', overflow: 'hidden', border: '1px solid #334155' }}>
+            <div style={{ background: '#f59e0b', padding: '1rem 1.5rem' }}>
+              <h3 style={{ margin: 0, color: '#000', fontWeight: 700 }}>Method Name</h3>
+              <p style={{ margin: '0.25rem 0 0', color: '#00000099', fontSize: '0.8rem' }}>Description</p>
+            </div>
+            <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <input style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.5rem', padding: '0.75rem', color: 'white', width: '100%' }} placeholder="Param" />
+              <button style={{ background: '#f59e0b', color: '#000', fontWeight: 700, border: 'none', borderRadius: '0.5rem', padding: '0.875rem', cursor: 'pointer', width: '100%' }}>Execute</button>
+              {error && <div style={{ color: '#f87171', fontSize: '0.8rem' }}>{error}</div>}
+              {success && <div style={{ color: '#4ade80', fontSize: '0.8rem' }}>{success}</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+API RULES:
+- Import and use `useContract()` from `./hooks/useContract` for all method calls
+- ALWAYS import APP_ID from `./hooks/useContract`: `import { useContract, APP_ID } from './hooks/useContract'`
+- NEVER hardcode a numeric app ID — always use the imported APP_ID constant
+- Import and use `useAlgorand()` from `./hooks/useAlgorand` for wallet address
+- Call `readState()` after every successful transaction to refresh stats
+- Guard all method calls with `if (!activeAddress) return` — show "Connect your wallet" message if not connected
+- Each method call goes in its own async handler with try/catch
+- CRITICAL — LOCAL STATE OPT-IN: If the contract spec has any `local_state` entries, you MUST implement an opt-in flow:
+  1. On load, call `readState()` — it returns `{ __opted_in__: boolean, ...globalState }`. Check `state.__opted_in__`
+  2. If `__opted_in__` is false or undefined, show a prominent "Opt In to App" card BEFORE showing any action buttons
+  3. The opt-in button MUST call `callMethod({ method: '__optIn__', args: [], app_id: APP_ID })` from `useAlgorand()` — NEVER call `opt_in()` from `useContract()`, that does not exist
+  4. After opt-in succeeds, set local state `hasOptedIn = true` and show the normal action UI
+  5. CRITICAL: Use a `useRef` to track opt-in so `refreshData` never resets it back to false after a successful opt-in
+  Example — COPY THIS EXACTLY:
+  ```tsx
+  const { activeAddress, callMethod } = useAlgorand();
+  const { vote, readState, loading, error, success } = useContract();
+  const [hasOptedIn, setHasOptedIn] = useState(false);
+  const [contractState, setContractState] = useState<any>({});
+  const optedInRef = useRef(false);
+
+  const refreshData = useCallback(async () => {
+    if (!activeAddress) return;
+    try {
+      const s: any = await readState();
+      setContractState(s);
+      // Only update opt-in from chain if chain says true, or ref not yet confirmed.
+      // Prevents chain indexing lag from overwriting a just-confirmed opt-in.
+      const chainOptedIn = !!s.__opted_in__;
+      if (chainOptedIn || !optedInRef.current) {
+        optedInRef.current = chainOptedIn;
+        setHasOptedIn(chainOptedIn);
+      }
+    } catch {}
+  }, [readState, activeAddress]);
+
+  useEffect(() => { refreshData(); }, [refreshData]);
+
+  useEffect(() => {
+    optedInRef.current = false;
+    setHasOptedIn(false);
+  }, [activeAddress]);
+
+  // Opt-in handler — optimistic update then chain confirmation
+  const handleOptIn = async () => {
+    if (!activeAddress) return;
+    try {
+      await callMethod({ method: '__optIn__', args: [], app_id: APP_ID });
+      optedInRef.current = true;
+      setHasOptedIn(true); // show voting UI immediately
+      await refreshData(); // confirm from chain
+    } catch (err) { console.error(err); }
+  };
+  ```
+
+Output ONLY the complete App.tsx code. No markdown fences. No explanation."""
 
 REACT_AGENT_USER_PROMPT = """Create a PREMIUM App.tsx for: {name} — {description}
 
@@ -74,6 +170,10 @@ UI REQUIREMENTS:
 
 SDK CONTEXT (for ABI hints):
 {docs_context}
+
+CRITICAL — DEPLOYED APP ID: The contract is deployed at APP_ID = {app_id}.
+You MUST NOT hardcode any other number. The useContract hook already exports APP_ID = {app_id}.
+Import it: import {{ useContract, APP_ID }} from './hooks/useContract';
 
 Output THE COMPLETE App.tsx (start with // UI STRATEGY):"""
 
@@ -97,7 +197,8 @@ async def generate_react_frontend(
         description=spec.get("description", ""),
         spec_json=json.dumps(spec, indent=2),
         ui_requirements=", ".join(spec.get("ui_requirements", [])) if isinstance(spec.get("ui_requirements"), list) else spec.get("ui_requirements", "standard dashboard"),
-        docs_context="\n".join(docs_context[:5]) if docs_context else "No documentation context provided."
+        docs_context="\n".join(docs_context[:5]) if docs_context else "No documentation context provided.",
+        app_id=package_id
     )
 
     response = await generate_completion(
@@ -132,11 +233,19 @@ def extract_react_code(response: str) -> str:
         
     return response.strip()
 
-def generate_contract_sdk(arc32_spec: dict) -> str:
+def generate_contract_sdk(arc32_spec: dict, package_id: str = "0") -> str:
     """Auto-generate a typed React hook from the ARC32 spec."""
     methods = []
     if arc32_spec:
         methods = arc32_spec.get("contract", {}).get("methods", []) or arc32_spec.get("methods", [])
+
+    LIFECYCLE_METHODS = {
+        "createApplication", "optInToApplication", "closeOutOfApplication",
+        "updateApplication", "deleteApplication",
+        # snake_case variants some models generate
+        "create_application", "opt_in", "opt_in_to_application",
+        "close_out", "close_out_of_application", "update_application", "delete_application"
+    }
     
     def ts_type(arc_type: str) -> str:
         arc_type = str(arc_type)
@@ -154,7 +263,8 @@ def generate_contract_sdk(arc32_spec: dict) -> str:
     lines = [
         "// AUTO-GENERATED from ARC32 — DO NOT EDIT",
         "import { useAlgorand } from './useAlgorand';",
-        "import { APP_ID } from '/lib/algorand';",
+        "",
+        f"export const APP_ID = {package_id};",
         "",
         "export const useContract = () => {",
         "    const { callMethod, readState, loading, error, success } = useAlgorand();",
@@ -164,7 +274,8 @@ def generate_contract_sdk(arc32_spec: dict) -> str:
 
     for m in methods:
         name = m.get("name", "")
-        if not name or name == "createApplication": continue
+        if not name or name in LIFECYCLE_METHODS:
+            continue
         
         args = m.get("args", [])
         ts_args = []
@@ -208,206 +319,110 @@ def build_file_structure(app_code: str, package_id: str, arc32_spec: any = None)
         files["/contract.arc32.json"] = json.dumps(arc32_spec, indent=2)
     
     # Always generate the SDK file to prevent import crashes
-    sdk_code = generate_contract_sdk(arc32_spec or {})
+    sdk_code = generate_contract_sdk(arc32_spec or {}, package_id)
     files["/hooks/useContract.ts"] = sdk_code
         
     return ReactGenerationResult(files=files)
 
 DEFAULT_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
-:root {
-  --bg: #0f172a;
-  --surface: #1e293b;
-  --surface-hover: #334155;
-  --primary: #f59e0b;
-  --primary-hover: #d97706;
-  --secondary: #3b82f6;
-  --text: #f8fafc;
-  --text-muted: #94a3b8;
-  --border: rgba(255, 255, 255, 0.1);
-  --glass: rgba(255, 255, 255, 0.03);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --success: #10b981;
-  --error: #ef4444;
-}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-* { box-sizing: border-box; }
-body { 
-  background-color: var(--bg);
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(245, 158, 11, 0.1) 0px, transparent 50%);
-  color: var(--text);
-  font-family: 'Inter', system-ui, sans-serif;
-  margin: 0;
-  line-height: 1.5;
+body {
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
-.app-container {
-  max-width: 1000px;
-  margin: 0 auto;
-  padding: 2rem 1rem;
-  animation: fadeIn 0.5s ease-out;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.glass-card {
-  background: var(--glass);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--glass-border);
-  border-radius: 1.5rem;
-  padding: 2rem;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-  margin-bottom: 2rem;
-}
-
-.hero-section {
-  text-align: center;
-  margin-bottom: 4rem;
-}
-
-.hero-title {
-  font-size: 3rem;
-  font-weight: 800;
-  background: linear-gradient(to right, #fff, var(--primary));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin-bottom: 1rem;
-}
-
-.hero-subtitle {
-  color: var(--text-muted);
-  font-size: 1.125rem;
-  max-width: 600px;
-  margin: 0 auto;
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1.5rem;
-  margin-bottom: 3rem;
-}
-
-.stat-card {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border);
-  padding: 1.5rem;
-  border-radius: 1rem;
-  text-align: center;
-  transition: all 0.2s ease;
-}
-
-.stat-card:hover { border-color: var(--primary); transform: translateY(-2px); }
-.stat-label { color: var(--text-muted); font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; }
-.stat-value { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
-
-.actions-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 2rem;
-}
-
-.action-card {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.input-group { display: flex; flex-direction: column; gap: 0.5rem; }
-.label { font-size: 0.875rem; font-weight: 600; color: var(--text-muted); }
-
-.input {
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
+input, textarea, select {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
   padding: 0.75rem 1rem;
   color: white;
   font-family: inherit;
-  transition: all 0.2s;
+  font-size: 0.95rem;
+  width: 100%;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  outline: none;
 }
 
-.input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2); }
+input:focus, textarea:focus, select:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+}
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  background: var(--primary);
-  color: #000;
-  font-weight: 700;
-  border: none;
-  padding: 0.875rem 1.5rem;
-  border-radius: 0.75rem;
+input::placeholder, textarea::placeholder { color: #475569; }
+
+button {
+  font-family: inherit;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.btn:hover { background: var(--primary-hover); transform: scale(1.02); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-.btn-secondary { background: var(--surface); color: white; border: 1px solid var(--border); }
-.btn-secondary:hover { background: var(--surface-hover); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.badge {
-  padding: 0.25rem 0.75rem;
-  border-radius: 9999px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
-.badge-success { background: rgba(16, 185, 129, 0.1); color: var(--success); }
-.badge-error { background: rgba(239, 68, 68, 0.1); color: var(--error); }
-
-.tx-log {
-  margin-top: 3rem;
-  font-size: 0.875rem;
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.tx-item {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 1rem;
-  border-bottom: 1px solid var(--border);
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
-.tx-id { font-family: monospace; color: var(--secondary); text-decoration: none; }
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.fade-in { animation: fadeIn 0.4s ease-out; }
 """
 
 USE_ALGORAND_HOOK_TEMPLATE = """
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 
-/**
- * AlgoCraft Bridge Hook
- * This hook sends requests to the parent AlgoCraft app via postMessage.
- * The parent app handles real wallet signing and blockchain interaction.
- */
 export const useAlgorand = () => {
     const [activeAddress, setActiveAddress] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
+    const activeAddressRef = useRef('');
 
-    // Initial address fetch and event listener
+    useEffect(() => {
+        activeAddressRef.current = activeAddress;
+    }, [activeAddress]);
+
     useEffect(() => {
         const handleEvent = (event: MessageEvent) => {
             if (event.data?.type === 'ALGOCRAFT_RESPONSE' && event.data.result?.address !== undefined) {
-                setActiveAddress(event.data.result.address);
+                const addr = event.data.result.address || '';
+                setActiveAddress(addr);
+                activeAddressRef.current = addr;
             }
             if (event.data?.type === 'ALGOCRAFT_EVENT' && event.data.event === 'WALLET_CHANGED') {
-                setActiveAddress(event.data.payload.address);
+                const addr = event.data.payload.address || '';
+                setActiveAddress(addr);
+                activeAddressRef.current = addr;
             }
         };
         window.addEventListener('message', handleEvent);
-        window.parent.postMessage({ id: 'init_addr', type: 'GET_ADDRESS' }, '*');
+        setTimeout(() => {
+            window.parent.postMessage({ id: 'init_addr', type: 'GET_ADDRESS' }, '*');
+        }, 0);
         return () => window.removeEventListener('message', handleEvent);
     }, []);
 
@@ -450,7 +465,9 @@ export const useAlgorand = () => {
         });
     }, []);
 
+    // Always reads the latest address from ref — never stale
     const readState = useCallback(async (app_id: number | string) => {
+        const address = activeAddressRef.current || undefined;
         return new Promise((resolve, reject) => {
             const id = 'read_' + Math.random().toString(36).substring(7);
             const handleResponse = (e: MessageEvent) => {
@@ -461,7 +478,11 @@ export const useAlgorand = () => {
                 }
             };
             window.addEventListener('message', handleResponse);
-            window.parent.postMessage({ id, type: 'READ_STATE', payload: { appId: app_id } }, '*');
+            window.parent.postMessage({ 
+                id, 
+                type: 'READ_STATE', 
+                payload: { appId: app_id, address } 
+            }, '*');
         });
     }, []);
 
