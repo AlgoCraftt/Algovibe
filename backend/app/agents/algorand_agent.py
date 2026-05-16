@@ -44,7 +44,8 @@ RIGHT:  Use the convention-based lifecycle method name instead of @abimethod dec
   OR if you must use a decorator:
         @abimethod({ allowActions: 'OptIn' })
         public optIn(): void { ... }
-Do NOT pass 'onComplete' or 'onOptIn' as keys inside @abimethod({}). They are not valid.""",
+Do NOT pass 'onComplete' or 'onOptIn' as keys inside @abimethod({}). They are not valid.
+NEVER put allowActions: 'OptIn' on business methods (e.g. cast_vote) when you also expose optInToApplication() — use plain @abimethod() for post-opt-in calls.""",
     ),
     (
         re.compile(r"gtxn\[|can't be used to index type 'typeof gtxn'", re.IGNORECASE),
@@ -241,8 +242,10 @@ BANNED — The compiler will REJECT these. Never write them:
 ❌ boolean, string in import  → they are native TS, DO NOT import them
 ❌ sendPayment(...)             → use itxn.payment({...}).submit()
 ❌ gtxn[0] or gtxn[Uint64(0)]  → use gtxn.PaymentTxn(Uint64(0)) or gtxn.AssetTransferTxn(Uint64(0))
-❌ @abimethod({ onComplete: ... })  → use @abimethod({ allowActions: 'OptIn' }) or optInToApplication()
-❌ @abimethod({ onOptIn: ... })     → same as above — 'onOptIn' is not a valid key
+❌ @abimethod({ onComplete: ... })  → use public optInToApplication(): void (lifecycle, no decorator)
+❌ @abimethod({ onOptIn: ... })     → 'onOptIn' is not a valid key
+❌ @abimethod({ allowActions: 'OptIn' }) on business methods (cast_vote, transfer, etc.) when you ALSO have optInToApplication() — breaks two-step opt-in UI. Use plain @abimethod() for all methods after opt-in.
+❌ @abimethod({ allowActions: 'OptIn' }) on cast_vote / vote / mint when LocalState exists — use @abimethod() only
 ❌ GlobalState<bool>           → use GlobalState<boolean>
 ❌ Txn.objectsInner            → use gtxn.PaymentTxn(Uint64(n)) for group access
 ❌ const amount = 100          → use const amount: uint64 = Uint64(100)
@@ -330,6 +333,26 @@ export class Voting extends Contract {
 }
 ```
 
+VERIFIED EXAMPLE 4 (Voting with LocalState — two-step opt-in + vote):
+```typescript
+export class CommunityVote extends Contract {
+  voted = LocalState<uint64>({ key: 'voted' })
+  // ... global state ...
+
+  public createApplication(): void { /* init */ }
+
+  public optInToApplication(): void {
+    this.voted(Txn.sender).value = Uint64(0)  // lifecycle — NO @abimethod decorator
+  }
+
+  @abimethod()  // plain NoOp — NOT allowActions: 'OptIn'
+  public cast_vote(candidate: string): void {
+    assert(this.voted(Txn.sender).value === Uint64(0), 'Already voted')
+    // ... increment tallies, set voted to 1
+  }
+}
+```
+
 Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation, no markdown fence.""",
         },
     }
@@ -396,6 +419,19 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
                 cleaned.append(line)
                 prev_was_assert = bool(re.match(r'assert\s*\(', stripped))
             code = '\n'.join(cleaned)
+
+            # 9. Two-step opt-in contracts: strip allowActions:'OptIn' from @abimethod business methods.
+            # If optInToApplication() exists, votes/calls must use NoOp after separate opt-in.
+            if 'optInToApplication' in code:
+                code = re.sub(
+                    r"@abimethod\(\s*\{\s*allowActions\s*:\s*['\"]OptIn['\"]\s*\}\s*\)",
+                    "@abimethod()",
+                    code,
+                )
+                logger.info(
+                    "[ALGORAND_AGENT] Sanitizer: stripped allowActions OptIn "
+                    "(contract uses optInToApplication lifecycle)"
+                )
 
         return code
 
@@ -482,8 +518,8 @@ export class {safe_name} extends Contract {{
   }}
 
   // === FILL: public business methods ===
-  // Use: public methodName(param: uint64): uint64 {{ ... }}
-  // Convention opt-in: public optInToApplication(): void {{ ... }}
+  // Use: @abimethod() public methodName(...) — plain decorator, NO allowActions: 'OptIn'
+  // If LocalState exists: public optInToApplication(): void {{ ... }} (lifecycle, no @abimethod)
 }}
 ```
 

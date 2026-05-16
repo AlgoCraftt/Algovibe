@@ -4,45 +4,55 @@ import React, { useState } from 'react'
 import { Download, Loader2 } from 'lucide-react'
 import JSZip from 'jszip'
 import { useAlgoCraftStore } from '@/lib/store'
+import {
+  EXPORT_MAIN_TS,
+  EXPORT_USE_ALGORAND_TS,
+  EXPORT_WALLET_CONNECT_TS,
+  EXPORT_APP_SHELL_TS,
+  EXPORT_USE_CONTRACT_STATE_TS,
+  EXPORT_INDEX_CSS,
+  EXPORT_VITE_CONFIG,
+  EXPORT_VITE_ENV,
+} from '@/lib/export-templates'
+import { EXPORT_ALGORAND_STATE_TS } from '@/lib/export-algorand-state-string'
 
 export function ExportButton() {
-  const { generatedFiles, contractId } = useAlgoCraftStore()
+  const { generatedFiles, contractId, arc32Spec } = useAlgoCraftStore()
   const [isExporting, setIsExporting] = useState(false)
 
   const handleExport = async () => {
     setIsExporting(true)
     try {
       const zip = new JSZip()
-      
-      // 1. App Code & Styles
-      zip.file('src/App.tsx', generatedFiles['/App.tsx'] || generatedFiles['/App.jsx'] || '')
-      zip.file('src/index.css', generatedFiles['/index.css'] || '')
-      
-      // 2. Main Entry Point
-      zip.file('src/main.tsx', `
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import { WalletProvider, NetworkId, useWallet } from '@txnlab/use-wallet-react'
-import { WalletManager } from '@txnlab/use-wallet'
-import App from './App'
-import './index.css'
 
-const walletManager = new WalletManager({
-  wallets: [], // Add Pera/Defly/etc here in production
-  network: NetworkId.TESTNET
-})
+      const boilerplateFiles = new Set([
+        '/mock-wallet.tsx',
+        '/mock-algosdk.ts',
+        '/index.tsx',
+        '/lib/algorand.ts',
+      ])
+      for (const [path, content] of Object.entries(generatedFiles)) {
+        if (boilerplateFiles.has(path)) continue
+        const filePath = path.startsWith('/') ? path.slice(1) : path
+        zip.file(`src/${filePath}`, content)
+      }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <WalletProvider manager={walletManager}>
-      <App />
-    </WalletProvider>
-  </React.StrictMode>,
-)
-`.trim())
+      if (arc32Spec) {
+        zip.file('src/contract.arc32.json', JSON.stringify(arc32Spec, null, 2))
+      }
 
-      zip.file('index.html', `
-<!DOCTYPE html>
+      zip.file('src/main.tsx', EXPORT_MAIN_TS)
+      zip.file('src/index.css', EXPORT_INDEX_CSS)
+      zip.file('src/components/WalletConnect.tsx', EXPORT_WALLET_CONNECT_TS)
+      zip.file('src/components/AppShell.tsx', EXPORT_APP_SHELL_TS)
+      zip.file('src/lib/algorand-state.ts', EXPORT_ALGORAND_STATE_TS)
+      zip.file('src/hooks/useAlgorand.ts', EXPORT_USE_ALGORAND_TS)
+      zip.file('src/hooks/useContractState.ts', EXPORT_USE_CONTRACT_STATE_TS)
+      zip.file('src/vite-env.d.ts', EXPORT_VITE_ENV)
+
+      zip.file(
+        'index.html',
+        `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -54,213 +64,96 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
-</html>
-`.trim())
+</html>`.trim()
+      )
 
-      // 3. Standalone Hooks (REAL versions using algosdk)
-      zip.file('src/hooks/useAlgorand.ts', `
-import { useState, useCallback, useMemo } from 'react';
-import { useWallet } from '@txnlab/use-wallet-react';
-import algosdk from 'algosdk';
-
-const ALGOD_SERVER = 'https://testnet-api.algonode.cloud';
-const ALGOD_TOKEN = '';
-const ALGOD_PORT = 443;
-
-export const useAlgorand = () => {
-    const { signer, activeAddress } = useWallet();
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [success, setSuccess] = useState<string | null>(null);
-
-    const algodClient = useMemo(() => new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, ALGOD_PORT), []);
-
-    const callMethod = useCallback(async ({ 
-      method, 
-      args = [], 
-      app_id,
-      payment 
-    }: { 
-      method: string, 
-      args?: any[], 
-      app_id: number | string,
-      payment?: { amount: number }
-    }) => {
-        if (!activeAddress || !signer) {
-          throw new Error("Wallet not connected");
-        }
-        
-        setLoading(true);
-        setError(null);
-        setSuccess(null);
-        
-        try {
-            const params = await algodClient.getTransactionParams().do();
-            
-            // Note: In production, you would load the contract ARC32 spec here 
-            // and use algosdk.ABIContract to properly encode arguments.
-            
-            const txn = algosdk.makeApplicationCallTxnFromObject({
-                sender: activeAddress,
-                appIndex: Number(app_id),
-                onComplete: algosdk.OnApplicationComplete.NoOpOC,
-                appArgs: [new TextEncoder().encode(method), ...args.map(a => new TextEncoder().encode(String(a)))],
-                suggestedParams: params,
-            });
-
-            let txns = [txn];
-            if (payment) {
-              const payTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-                sender: activeAddress,
-                receiver: algosdk.getApplicationAddress(Number(app_id)),
-                amount: payment.amount,
-                suggestedParams: params,
-              });
-              txns = [payTxn, txn];
-              algosdk.assignGroupID(txns);
-            }
-
-            const signed = await signer(txns, txns.map((_, i) => i));
-            const { txId } = await algodClient.sendRawTransaction(signed).do();
-            await algosdk.waitForConfirmation(algodClient, txId, 4);
-            
-            setSuccess(txId);
-            return { txId };
-        } catch (e: any) {
-            setError(e.message);
-            throw e;
-        } finally {
-            setLoading(false);
-        }
-    }, [activeAddress, signer, algodClient]);
-
-    const readState = useCallback(async (app_id: number | string) => {
-        const info = await algodClient.getApplicationByID(Number(app_id)).do();
-        const state: Record<string, any> = {};
-        (info.params['global-state'] || []).forEach((item: any) => {
-            const key = Buffer.from(item.key, 'base64').toString();
-            state[key] = item.value.type === 1 ? item.value.bytes : item.value.uint;
-        });
-        return state;
-    }, [algodClient]);
-
-    return { activeAddress, callMethod, readState, loading, error, success };
-};
-`.trim())
-
-      zip.file('src/hooks/useContractState.ts', `
-import { useState, useEffect } from 'react';
-import { useAlgorand } from './useAlgorand';
-
-export const useContractState = (app_id: number | string) => {
-    const { readState } = useAlgorand();
-    const [state, setState] = useState<Record<string, any>>({});
-    const [loading, setLoading] = useState(true);
-
-    const refresh = async () => {
-        if (!app_id || app_id === "0") return;
-        try {
-            const data = await readState(app_id);
-            setState(data as any);
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        refresh();
-        const interval = setInterval(refresh, 5000);
-        return () => clearInterval(interval);
-    }, [app_id]);
-
-    return { state, loading, refresh };
-};
-`.trim())
-
-      // 4. Project Config
       zip.file('package.json', JSON.stringify({
-        name: "algocraft-generated-dapp",
+        name: 'algocraft-generated-dapp',
         private: true,
-        version: "0.0.0",
-        type: "module",
+        version: '0.0.0',
+        type: 'module',
         scripts: {
-          "dev": "vite",
-          "build": "tsc && vite build",
-          "preview": "vite preview"
+          dev: 'vite',
+          build: 'tsc && vite build',
+          preview: 'vite preview',
         },
         dependencies: {
-          "react": "^18.2.0",
-          "react-dom": "^18.2.0",
-          "algosdk": "^3.5.2",
-          "@txnlab/use-wallet-react": "^4.6.0",
-          "@txnlab/use-wallet": "^4.6.0",
-          "lucide-react": "latest",
-          "framer-motion": "latest"
+          react: '^18.2.0',
+          'react-dom': '^18.2.0',
+          algosdk: '^3.5.2',
+          '@txnlab/use-wallet-react': '^4.6.0',
+          '@txnlab/use-wallet': '^4.6.0',
+          'lute-connect': '^1.7.0',
+          buffer: '^6.0.3',
         },
         devDependencies: {
-          "@types/react": "^18.2.0",
-          "@types/react-dom": "^18.2.0",
-          "@vitejs/plugin-react": "^4.0.0",
-          "typescript": "^5.0.0",
-          "vite": "^4.3.0"
-        }
+          '@types/react': '^18.2.0',
+          '@types/react-dom': '^18.2.0',
+          '@vitejs/plugin-react': '^4.0.0',
+          typescript: '^5.0.0',
+          vite: '^4.3.0',
+        },
       }, null, 2))
 
-      zip.file('vite.config.ts', `
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react()],
-})
-`.trim())
+      zip.file('vite.config.ts', EXPORT_VITE_CONFIG)
 
       zip.file('tsconfig.json', JSON.stringify({
         compilerOptions: {
-          target: "ESNext",
-          lib: ["DOM", "DOM.Iterable", "ESNext"],
-          module: "ESNext",
+          target: 'ESNext',
+          lib: ['DOM', 'DOM.Iterable', 'ESNext'],
+          module: 'ESNext',
           skipLibCheck: true,
-          moduleResolution: "node",
+          moduleResolution: 'node',
           allowImportingTsExtensions: true,
           resolveJsonModule: true,
           isolatedModules: true,
           noEmit: true,
-          jsx: "react-jsx",
+          jsx: 'react-jsx',
           strict: true,
-          noUnusedLocals: true,
-          noUnusedParameters: true,
-          noFallthroughCasesInSwitch: true
+          noUnusedLocals: false,
+          noUnusedParameters: false,
+          noFallthroughCasesInSwitch: true,
         },
-        include: ["src"]
+        include: ['src'],
       }, null, 2))
 
-      zip.file('README.md', `
-# AlgoCraft Generated DApp
+      zip.file(
+        'README.md',
+        `# AlgoCraft Generated DApp
 
-This project was generated by [AlgoCraft](https://algocraft.io).
+Generated by [AlgoCraft](https://github.com). Includes **full wallet connect** (Pera, Defly, Exodus, Lute) on Algorand Testnet.
 
-## Setup
+## Quick start
 
-1. Install dependencies:
-   \`\`\`bash
-   npm install
-   \`\`\`
+\`\`\`bash
+npm install
+npm run dev
+\`\`\`
 
-2. Run development server:
-   \`\`\`bash
-   npm run dev
-   \`\`\`
+Open the URL shown (usually http://localhost:5173). Click **Connect Wallet** in the top bar, then use the dApp.
+
+## What's included
+
+| Path | Purpose |
+|------|---------|
+| \`src/main.tsx\` | \`WalletProvider\` + \`AppShell\` wrapper |
+| \`src/components/WalletConnect.tsx\` | Connect / disconnect / copy address |
+| \`src/components/AppShell.tsx\` | Header + wallet banner |
+| \`src/hooks/useAlgorand.ts\` | algosdk + \`transactionSigner\` from wallet |
+| \`src/hooks/useContract.ts\` | ABI helpers for your contract |
+| \`src/contract.arc32.json\` | ARC-32 spec |
 
 ## Configuration
 
-The contract ID is currently set to: \`${contractId}\`.
-Check \`src/hooks/useAlgorand.ts\` to update the Algorand node configuration.
-`.trim())
+- **App ID:** \`${contractId ?? 'see useContract.ts'}\`
+- **Algod:** Testnet via Algonode (edit \`src/hooks/useAlgorand.ts\` for mainnet)
 
-      // 5. Generate and download
+## Wallet
+
+Uses [@txnlab/use-wallet-react](https://github.com/TxnLab/use-wallet). Install a supported browser wallet extension or mobile wallet before connecting.
+`.trim()
+      )
+
       const content = await zip.generateAsync({ type: 'blob' })
       const url = window.URL.createObjectURL(content)
       const link = document.createElement('a')
@@ -268,9 +161,8 @@ Check \`src/hooks/useAlgorand.ts\` to update the Algorand node configuration.
       link.download = `algocraft-dapp-${contractId || 'export'}.zip`
       link.click()
       window.URL.revokeObjectURL(url)
-
     } catch (err) {
-      console.error("Export failed:", err)
+      console.error('Export failed:', err)
     } finally {
       setIsExporting(false)
     }

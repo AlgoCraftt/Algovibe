@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { generateDApp, finalizeDeployment, type BuildEvent, type Protocol, type SuggestedProtocol, fetchProtocols, fetchSuggestedProtocols } from './api'
+import { patchPreviewBridgeFiles } from './preview-bridge-hooks'
 
 export type BuildStep =
   | 'idle'
@@ -507,7 +508,7 @@ function handleBuildEvent(
     case 'complete':
       setBuildStatus('complete')
       if (event.files) {
-        setGeneratedFiles(event.files)
+        setGeneratedFiles(patchPreviewBridgeFiles(event.files))
       }
       addMessage('assistant', 'Your DApp is ready! Check the preview panel.')
       break

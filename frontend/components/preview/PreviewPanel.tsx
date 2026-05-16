@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAlgoCraftStore } from '@/lib/store'
-import { SandpackPreview } from './SandpackPreview'
+import dynamic from 'next/dynamic'
 import { FileTree } from './FileTree'
 import { BuildStatusExpanded } from './BuildStatus'
 import { BuildAnimation } from './BuildAnimation'
 import { ExportButton } from './ExportButton'
+import { DeploySignPrompt } from './DeploySignPrompt'
 import { cn } from '@/lib/utils'
 import Image from 'next/image'
 import {
@@ -30,6 +31,22 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
+const SandpackPreview = dynamic(
+  () => import('./SandpackPreview').then((m) => m.SandpackPreview),
+  {
+    ssr: false,
+    loading: () => (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="absolute inset-0 flex items-center justify-center bg-background/80"
+      >
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </motion.div>
+    ),
+  },
+)
+
 type Tab = 'preview' | 'code' | 'console' | 'status'
 
 export function PreviewPanel() {
@@ -40,7 +57,8 @@ export function PreviewPanel() {
   const [dirtyFiles, setDirtyFiles] = useState<Record<string, string>>({})
   const [activeFile, setActiveFile] = useState<string | undefined>()
   
-  const { generatedFiles, buildStatus, contractId, walletAddress, setGeneratedFiles } = useAlgoCraftStore()
+  const { generatedFiles, buildStatus, contractId, walletAddress, setGeneratedFiles, pendingSignature } = useAlgoCraftStore()
+  const isAwaitingSignature = buildStatus === 'awaiting_signature'
 
   const handleRefresh = () => {
     setRefreshKey(prev => prev + 1)
@@ -62,7 +80,7 @@ export function PreviewPanel() {
 
   useEffect(() => {
     if (buildStatus === 'awaiting_signature') {
-      setActiveTab('status')
+      setActiveTab('preview')
     }
   }, [buildStatus])
 
@@ -178,7 +196,18 @@ export function PreviewPanel() {
       </div>
 
       {/* Content Area */}
-      <div className="flex flex-1 overflow-hidden relative z-0">
+      <div className="flex flex-1 flex-col overflow-hidden relative z-0 min-h-0">
+        {isAwaitingSignature && pendingSignature && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="shrink-0 border-b border-nb-gold/25 bg-gradient-to-r from-nb-gold/10 via-surface to-surface px-4 py-3 z-30"
+          >
+            <DeploySignPrompt variant="inline" />
+          </motion.div>
+        )}
+
+        <div className="flex flex-1 overflow-hidden relative min-h-0">
         <AnimatePresence mode="wait">
           {showFileTree && hasFiles && (
             <motion.div 
@@ -201,11 +230,11 @@ export function PreviewPanel() {
 
         <div className="flex-1 overflow-hidden relative">
           <AnimatePresence mode="wait">
-            {isBuilding && !hasFiles ? (
+            {isBuilding && !hasFiles && !isAwaitingSignature ? (
               <motion.div key="build-animation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
                 <BuildAnimation />
               </motion.div>
-            ) : hasFiles ? (
+            ) : hasFiles || isAwaitingSignature ? (
               <motion.div key="sandpack-preview" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
                 <SandpackPreview
                   key={refreshKey}
@@ -230,6 +259,7 @@ export function PreviewPanel() {
               </motion.div>
             )}
           </AnimatePresence>
+        </div>
         </div>
       </div>
     </div>

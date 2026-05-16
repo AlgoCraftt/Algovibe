@@ -36,7 +36,7 @@ import './index.css';
 
 VISUAL DESIGN RULES — these are NON-NEGOTIABLE:
 1. Use INLINE STYLES everywhere (no className-only approach). The CSS file provides base styles but inline styles drive the layout.
-2. Layout: Full-page dark dashboard. Top navbar with app name + wallet address pill. Main content in a centered max-width container.
+2. Layout: Full-page dark dashboard. Main content in a centered max-width container. Do NOT add a wallet connect button in App.tsx — export wraps the app in AppShell with WalletConnect in the header; you may show activeAddress as read-only text for gating only.
 3. Stats row: Render ALL global state values as glowing metric cards (dark bg, amber border, large number, label below).
 4. Action cards: Each contract method gets its own card with a colored header, input fields, and a styled button.
 5. Colors: background #0f172a, card bg #1e293b, accent #f59e0b, text white, muted #94a3b8.
@@ -107,54 +107,64 @@ API RULES:
 - ALWAYS import APP_ID from `./hooks/useContract`: `import { useContract, APP_ID } from './hooks/useContract'`
 - NEVER hardcode a numeric app ID — always use the imported APP_ID constant
 - Import and use `useAlgorand()` from `./hooks/useAlgorand` for wallet address
+- CRITICAL — METHOD NAMES: The `useContract()` hook exports methods in camelCase. You MUST use the camelCase version of every method name. Examples: `set_frozen` → `setFrozen`, `transfer_nft` → `transferNft`, `get_balance` → `getBalance`. NEVER use snake_case method names from the contract spec directly — always convert them to camelCase when calling from `useContract()`.
 - Call `readState()` after every successful transaction to refresh stats
-- Guard all method calls with `if (!activeAddress) return` — show "Connect your wallet" message if not connected
+- CRITICAL — GLOBAL STATE KEYS: readState() returns on-chain keys AND ARC-32 schema aliases (e.g. both `td` and `total_donations` if declared in schema). Prefer keys from contract spec `global_state` / ARC-32 `schema.global.declared` — use the `key` field from schema, not invented names.
+- CRITICAL — PAY METHODS: Methods with a `pay` argument (e.g. donate(pay)) are called via useContract with a microAlgo amount — NEVER pass payment as an ABI arg. Example: `donate(amountMicroAlgos)` not `donate(paymentTxn)`.
+- Load global stats on mount even before wallet connects: call `readState()` in useEffect on mount without requiring activeAddress; only gate opt-in / local actions on wallet.
+- Guard write method calls with `if (!activeAddress) return` — show "Connect your wallet" message if not connected
 - Each method call goes in its own async handler with try/catch
 - CRITICAL — LOCAL STATE OPT-IN: If the contract spec has any `local_state` entries, you MUST implement an opt-in flow:
   1. On load, call `readState()` — it returns `{ __opted_in__: boolean, ...globalState }`. Check `state.__opted_in__`
   2. If `__opted_in__` is false or undefined, show a prominent "Opt In to App" card BEFORE showing any action buttons
   3. The opt-in button MUST call `callMethod({ method: '__optIn__', args: [], app_id: APP_ID })` from `useAlgorand()` — NEVER call `opt_in()` from `useContract()`, that does not exist
   4. After opt-in succeeds, set local state `hasOptedIn = true` and show the normal action UI
-  5. CRITICAL: Use a `useRef` to track opt-in so `refreshData` never resets it back to false after a successful opt-in
+  5. After opt-in succeeds, call `refreshData()` — trust `__opted_in__` from chain on reload
+  6. For uint64 contract args (e.g. cast_vote(0|1)), pass JavaScript numbers — NEVER BigInt literals (0n)
+  7. NEVER use JSON.stringify() on contractState (may contain bigint from chain)
   Example — COPY THIS EXACTLY:
   ```tsx
-  const { activeAddress, callMethod } = useAlgorand();
+  const { activeAddress, callMethod, onWalletReady } = useAlgorand();
   const { vote, readState, loading, error, success } = useContract();
   const [hasOptedIn, setHasOptedIn] = useState(false);
   const [contractState, setContractState] = useState<any>({});
-  const optedInRef = useRef(false);
 
   const refreshData = useCallback(async () => {
-    if (!activeAddress) return;
     try {
       const s: any = await readState();
       setContractState(s);
-      // Only update opt-in from chain if chain says true, or ref not yet confirmed.
-      // Prevents chain indexing lag from overwriting a just-confirmed opt-in.
-      const chainOptedIn = !!s.__opted_in__;
-      if (chainOptedIn || !optedInRef.current) {
-        optedInRef.current = chainOptedIn;
-        setHasOptedIn(chainOptedIn);
-      }
-    } catch {}
+      if (s.__opted_in__ === true) setHasOptedIn(true);
+      else if (s.__opted_in__ === false && activeAddress) setHasOptedIn(false);
+    } catch (err) {
+      console.error('Failed to fetch state:', err);
+    }
   }, [readState, activeAddress]);
 
   useEffect(() => { refreshData(); }, [refreshData]);
-
   useEffect(() => {
-    optedInRef.current = false;
-    setHasOptedIn(false);
-  }, [activeAddress]);
+    const unsub = onWalletReady(() => { refreshData(); });
+    return unsub;
+  }, [onWalletReady, refreshData]);
 
-  // Opt-in handler — optimistic update then chain confirmation
   const handleOptIn = async () => {
     if (!activeAddress) return;
     try {
-      await callMethod({ method: '__optIn__', args: [], app_id: APP_ID });
-      optedInRef.current = true;
-      setHasOptedIn(true); // show voting UI immediately
-      await refreshData(); // confirm from chain
-    } catch (err) { console.error(err); }
+      const res: any = await callMethod({ method: '__optIn__', args: [], app_id: APP_ID });
+      if (res?.alreadyOptedIn) {
+        setHasOptedIn(true);
+      } else {
+        setHasOptedIn(true);
+      }
+      await refreshData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already opted|already opt/i.test(msg)) {
+        setHasOptedIn(true);
+        await refreshData();
+      } else {
+        console.error('Opt-in failed:', err);
+      }
+    }
   };
   ```
 
@@ -249,12 +259,17 @@ def generate_contract_sdk(arc32_spec: dict, package_id: str = "0") -> str:
     
     def ts_type(arc_type: str) -> str:
         arc_type = str(arc_type)
+        if arc_type.lower() in ("pay", "payment"):
+            return "number"
         if "uint" in arc_type: return "number"
         if "bool" == arc_type: return "boolean"
         if "string" == arc_type: return "string"
         if "address" in arc_type: return "string"
         if "byte" in arc_type: return "string"
         return "any"
+
+    def is_pay_type(arc_type: str) -> bool:
+        return str(arc_type).lower() in ("pay", "payment")
         
     def camel_case(s: str) -> str:
         parts = s.split('_')
@@ -278,23 +293,46 @@ def generate_contract_sdk(arc32_spec: dict, package_id: str = "0") -> str:
             continue
         
         args = m.get("args", [])
+        pay_args = [a for a in args if is_pay_type(a.get("type", ""))]
+        abi_args = [a for a in args if not is_pay_type(a.get("type", ""))]
+
         ts_args = []
         app_args = []
-        for i, a in enumerate(args):
+        for i, a in enumerate(abi_args):
             arg_name = a.get("name") or f"arg{i}"
             if arg_name == 'class': arg_name = 'className'
             if arg_name == 'function': arg_name = 'fn'
             arg_type = ts_type(a.get("type", "any"))
             ts_args.append(f"{arg_name}: {arg_type}")
             app_args.append(arg_name)
-            
-        ts_args_str = ", ".join(ts_args)
+
+        pay_param = ""
+        if pay_args:
+            pay_name = pay_args[0].get("name") or "amountMicroAlgos"
+            if pay_name == 'class': pay_name = 'className'
+            if pay_name == 'function': pay_name = 'fn'
+            pay_param = f", {pay_name}: number"
+            if pay_name not in [p.split(":")[0].strip() for p in ts_args]:
+                ts_args.append(f"{pay_name}: number")
+
+        ts_args_str = ", ".join(ts_args) if ts_args else ""
         app_args_str = ", ".join(app_args)
         camel_name = camel_case(name)
-        
-        lines.append(f"        // {name}({ts_args_str})")
-        lines.append(f"        {camel_name}: async ({ts_args_str}) =>")
-        lines.append(f"            callMethod({{ method: '{name}', args: [{app_args_str}], app_id: APP_ID }}),")
+        pay_field = pay_args[0].get("name") if pay_args else "amountMicroAlgos"
+        if pay_field == 'class': pay_field = 'className'
+        if pay_field == 'function': pay_field = 'fn'
+
+        lines.append(f"        // {name}({ts_args_str}{pay_param})")
+        if pay_args:
+            lines.append(f"        {camel_name}: async ({ts_args_str}{', ' if ts_args_str else ''}{pay_field}: number) =>")
+            lines.append(
+                f"            callMethod({{ method: '{name}', args: [{app_args_str}], app_id: APP_ID, "
+                f"payment: {{ amount: {pay_field} }} }}),"
+            )
+        else:
+            sig = ts_args_str if ts_args_str else ""
+            lines.append(f"        {camel_name}: async ({sig}) =>" if sig else f"        {camel_name}: async () =>")
+            lines.append(f"            callMethod({{ method: '{name}', args: [{app_args_str}], app_id: APP_ID }}),")
         lines.append("")
 
     lines.extend([
@@ -395,12 +433,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 USE_ALGORAND_HOOK_TEMPLATE = """
 import { useState, useCallback, useEffect, useRef } from 'react';
 
+const requestAddress = () =>
+  new Promise<string>((resolve) => {
+    const id = 'get_addr_' + Math.random().toString(36).slice(2);
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler);
+      resolve('');
+    }, 5000);
+    const handler = (e: MessageEvent) => {
+      if (e.data?.id === id && e.data?.type === 'ALGOCRAFT_RESPONSE') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', handler);
+        resolve(e.data.result?.address || '');
+      }
+    };
+    window.addEventListener('message', handler);
+    window.parent.postMessage({ id, type: 'GET_ADDRESS' }, '*');
+  });
+
 export const useAlgorand = () => {
     const [activeAddress, setActiveAddress] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
     const activeAddressRef = useRef('');
+    const walletChangeListeners = useRef<(() => void)[]>([]);
 
     useEffect(() => {
         activeAddressRef.current = activeAddress;
@@ -412,17 +469,22 @@ export const useAlgorand = () => {
                 const addr = event.data.result.address || '';
                 setActiveAddress(addr);
                 activeAddressRef.current = addr;
+                walletChangeListeners.current.forEach((fn) => fn());
             }
             if (event.data?.type === 'ALGOCRAFT_EVENT' && event.data.event === 'WALLET_CHANGED') {
-                const addr = event.data.payload.address || '';
+                const addr = event.data.payload?.address || '';
                 setActiveAddress(addr);
                 activeAddressRef.current = addr;
+                walletChangeListeners.current.forEach((fn) => fn());
             }
         };
         window.addEventListener('message', handleEvent);
-        setTimeout(() => {
-            window.parent.postMessage({ id: 'init_addr', type: 'GET_ADDRESS' }, '*');
-        }, 0);
+        requestAddress().then((addr) => {
+            if (addr) {
+                setActiveAddress(addr);
+                activeAddressRef.current = addr;
+            }
+        });
         return () => window.removeEventListener('message', handleEvent);
     }, []);
 
@@ -440,6 +502,8 @@ export const useAlgorand = () => {
         setLoading(true);
         setError(null);
         setSuccess(null);
+
+        const normalizedArgs = args.map((a) => (typeof a === 'bigint' ? Number(a) : a));
         
         return new Promise((resolve, reject) => {
             const id = Math.random().toString(36).substring(7);
@@ -460,14 +524,20 @@ export const useAlgorand = () => {
             window.parent.postMessage({ 
                 id, 
                 type: 'CALL_METHOD', 
-                payload: { method, args, appId: app_id, payment } 
+                payload: { method, args: normalizedArgs, appId: app_id, payment } 
             }, '*');
         });
     }, []);
 
-    // Always reads the latest address from ref — never stale
     const readState = useCallback(async (app_id: number | string) => {
-        const address = activeAddressRef.current || undefined;
+        let address = activeAddressRef.current;
+        if (!address) {
+            address = await requestAddress();
+            if (address) {
+                setActiveAddress(address);
+                activeAddressRef.current = address;
+            }
+        }
         return new Promise((resolve, reject) => {
             const id = 'read_' + Math.random().toString(36).substring(7);
             const handleResponse = (e: MessageEvent) => {
@@ -481,15 +551,24 @@ export const useAlgorand = () => {
             window.parent.postMessage({ 
                 id, 
                 type: 'READ_STATE', 
-                payload: { appId: app_id, address } 
+                payload: { appId: app_id, address: address || undefined } 
             }, '*');
         });
+    }, []);
+
+    const onWalletReady = useCallback((fn: () => void) => {
+        walletChangeListeners.current.push(fn);
+        if (activeAddressRef.current) fn();
+        return () => {
+            walletChangeListeners.current = walletChangeListeners.current.filter((f) => f !== fn);
+        };
     }, []);
 
     return { 
       activeAddress, 
       callMethod, 
       readState,
+      onWalletReady,
       loading, 
       error, 
       success 
@@ -498,16 +577,16 @@ export const useAlgorand = () => {
 """
 
 USE_CONTRACT_STATE_HOOK_TEMPLATE = """
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAlgorand } from './useAlgorand';
 
 export const useContractState = (app_id: number | string) => {
-    const { readState } = useAlgorand();
+    const { readState, onWalletReady } = useAlgorand();
     const [state, setState] = useState<Record<string, any>>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const refresh = async () => {
+    const refresh = useCallback(async () => {
         if (!app_id || app_id === "0") return;
         try {
             const data = await readState(app_id);
@@ -518,13 +597,18 @@ export const useContractState = (app_id: number | string) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [app_id, readState]);
 
     useEffect(() => {
         refresh();
         const interval = setInterval(refresh, 5000);
         return () => clearInterval(interval);
-    }, [app_id]);
+    }, [refresh]);
+
+    useEffect(() => {
+        const unsub = onWalletReady(() => { refresh(); });
+        return unsub;
+    }, [onWalletReady, refresh]);
 
     return { state, loading, error, refresh };
 };

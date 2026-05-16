@@ -1,5 +1,6 @@
 'use client'
 
+import '@/lib/sandpack-init'
 import React, { Component, type ReactNode, useState, useMemo } from 'react'
 import {
   SandpackProvider,
@@ -11,6 +12,7 @@ import {
 } from '@codesandbox/sandpack-react'
 import { Wallet, ExternalLink, Globe, Copy, Check } from 'lucide-react'
 import { BridgeHandler } from './BridgeHandler'
+import { patchPreviewBridgeFiles } from '@/lib/preview-bridge-hooks'
 
 interface SandpackPreviewProps {
   files: Record<string, string>
@@ -51,10 +53,10 @@ class SandpackErrorBoundary extends Component<
         <div className="flex h-full flex-col items-center justify-center p-6 text-center bg-neutral-900">
           <div className="rounded-xl bg-red-900/30 border border-red-500/30 p-6 max-w-lg">
             <h3 className="text-lg font-semibold text-red-400 mb-2">
-              Syntax Error in Generated Code
+              Preview Error
             </h3>
             <p className="text-sm text-red-300/80 mb-4">
-              The generated code has a syntax error. This can happen occasionally with AI-generated code.
+              The live preview hit a runtime error. Check the message below or open the Code tab.
             </p>
             <div className="text-left bg-neutral-950 rounded-lg p-3 text-xs font-mono text-red-300 overflow-auto max-h-32">
               {this.state.error?.message || 'Unknown error'}
@@ -276,35 +278,26 @@ function SandpackStateSync({
 }) {
   const { sandpack } = useSandpack();
   const latestProp = React.useRef(activeFileProp);
-  const isInternalChange = React.useRef(false);
-  
-  // Keep track of the latest prop as a ref to avoid stale closure issues
-  // while comparing with internal state
   latestProp.current = activeFileProp;
-  
-  React.useEffect(() => {
-    // If sandpack switches internally, sync it UP to parent
-    // Sandpack sometimes normalizes files to have a leading slash
-    if (onActiveFileChange && sandpack.activeFile) {
-      const current = sandpack.activeFile;
-      const normalizedProp = latestProp.current?.startsWith('/') ? latestProp.current : `/${latestProp.current}`;
-      
-      if (current !== latestProp.current && current !== normalizedProp) {
-        // Only trigger update if it's truly a different file and not just a slash mismatch
-        onActiveFileChange(current);
-      }
-    }
-  }, [sandpack.activeFile, onActiveFileChange]);
 
+  // Sync internal sandpack tab changes UP to parent
   React.useEffect(() => {
-    if (activeFileProp) {
-      const target = activeFileProp.startsWith('/') ? activeFileProp : `/${activeFileProp}`;
-      
-      if (sandpack.files[target] && sandpack.activeFile !== target) {
-        sandpack.setActiveFile(target);
-      }
+    if (!onActiveFileChange || !sandpack.activeFile) return;
+    const current = sandpack.activeFile;
+    const normalizedProp = latestProp.current?.startsWith('/') ? latestProp.current : `/${latestProp.current}`;
+    if (current !== latestProp.current && current !== normalizedProp) {
+      onActiveFileChange(current);
     }
-  }, [activeFileProp, sandpack]);
+  }, [sandpack.activeFile]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync parent-driven file selection DOWN into sandpack
+  React.useEffect(() => {
+    if (!activeFileProp) return;
+    const target = activeFileProp.startsWith('/') ? activeFileProp : `/${activeFileProp}`;
+    if (sandpack.files[target] && sandpack.activeFile !== target) {
+      sandpack.setActiveFile(target);
+    }
+  }, [activeFileProp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return null;
 }
@@ -375,10 +368,10 @@ export function SandpackPreview(props: SandpackPreviewProps) {
   const showPreview = activeTab === 'preview'
 
   const allFiles = React.useMemo(() => {
-    const rawFiles: Record<string, string> = {
+    const rawFiles: Record<string, string> = patchPreviewBridgeFiles({
       ...(excludeBoilerplate ? {} : getDefaultFiles(contractId, walletAddress)),
       ...files,
-    }
+    })
 
     if (!excludeBoilerplate && !rawFiles['/App.tsx'] && !rawFiles['/App.jsx'] && !rawFiles['/App.js'] && !rawFiles['App.tsx']) {
       rawFiles['/App.tsx'] = defaultAppCode
@@ -405,7 +398,6 @@ export function SandpackPreview(props: SandpackPreviewProps) {
   }), [])
 
   const sandpackOptions = React.useMemo(() => ({
-    activeFile: activeFile ? (activeFile.startsWith('/') ? activeFile : `/${activeFile}`) : undefined,
     recompileMode: 'delayed' as const,
     recompileDelay: 500,
     visibleFiles: (excludeBoilerplate 

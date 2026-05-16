@@ -3,6 +3,7 @@ const path = require('path')
 
 const nextConfig = {
   reactStrictMode: true,
+  transpilePackages: ['@codesandbox/sandpack-react', '@codesandbox/sandpack-client'],
   // Enable experimental features for better performance
   experimental: {
     optimizePackageImports: ['lucide-react'],

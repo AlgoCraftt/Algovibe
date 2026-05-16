@@ -6,13 +6,12 @@ import { EmptyState } from './EmptyState'
 import { ChatSidebar } from './ChatSidebar'
 import { BuildAnimation } from '@/components/preview/BuildAnimation'
 import { PreviewPanel } from '@/components/preview/PreviewPanel'
-import { DeploySignPrompt } from '@/components/preview/DeploySignPrompt'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Navbar } from '@/components/layout/Navbar'
 import { Maximize2, Minimize2 } from 'lucide-react'
 
 export function ChatLayout() {
-  const { messages, buildStatus, pendingSignature } = useAlgoCraftStore()
+  const { messages, buildStatus } = useAlgoCraftStore()
   
   const isInitialState = messages.length === 0 && buildStatus === 'idle'
   const isBuilding = buildStatus !== 'idle' && buildStatus !== 'complete' && buildStatus !== 'error'
@@ -65,17 +64,6 @@ export function ChatLayout() {
                   </div>
                 )}
 
-                {/* SIGNING OVERLAY — always on top when awaiting signature AND we have a pending signature to show */}
-                {isAwaitingSignature && pendingSignature && (
-                  <div
-                    style={{ zIndex: 9999 }}
-                    className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md"
-                  >
-                    <div className="w-full max-w-md mx-6">
-                      <DeploySignPrompt />
-                    </div>
-                  </div>
-                )}
               </div>
             </motion.div>
           )}

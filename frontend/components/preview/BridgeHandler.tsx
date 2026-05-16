@@ -10,6 +10,17 @@ import {
   CallMethodPayload,
   ReadStatePayload
 } from '@/lib/bridge-protocol'
+import { getMethodOnComplete } from '@/lib/abi-tx'
+import { safeJsonStringify, sameAppId } from '@/lib/serialize'
+import { readApplicationState } from '@/lib/algorand-state'
+
+const OPT_IN_METHOD_NAMES = new Set([
+  '__optIn__',
+  'opt_in',
+  'optIn',
+  'opt_in_to_application',
+  'optInToApplication',
+])
 import { motion, AnimatePresence } from 'framer-motion'
 import { ShieldAlert, Check, X, Loader2, ExternalLink, Wallet } from 'lucide-react'
 
@@ -23,6 +34,31 @@ export function BridgeHandler() {
   const [error, setError] = useState<string | null>(null)
   const [successTxId, setSuccessTxId] = useState<string | null>(null)
 
+  // Notify Sandpack iframe when parent wallet connects / changes (fixes opt-in UI after reload)
+  useEffect(() => {
+    const notify = () => {
+      document.querySelectorAll('iframe').forEach((iframe) => {
+        iframe.contentWindow?.postMessage(
+          {
+            type: 'ALGOCRAFT_EVENT',
+            event: 'WALLET_CHANGED',
+            payload: { address: activeAddress ?? '' },
+          },
+          '*'
+        )
+      })
+    }
+    notify()
+    const t = setTimeout(notify, 500)
+    return () => clearTimeout(t)
+  }, [activeAddress])
+
+  const isAccountOptedIn = async (appId: number, address: string) => {
+    const accountInfo = await algodClient.accountInformation(address).do()
+    const appsLocalState = (accountInfo as any)['apps-local-state'] || []
+    return appsLocalState.some((a: any) => sameAppId(a.id, appId))
+  }
+
   // Message Listener
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -34,18 +70,46 @@ export function BridgeHandler() {
       console.log(`[BridgeHandler] Received request: ${data.type}`, data.payload)
 
       switch (data.type) {
-        case 'GET_ADDRESS':
-          sendResponse(event.source!, data.id, { address: activeAddress })
+        case 'GET_ADDRESS': {
+          const addr =
+            activeAddress || useAlgoCraftStore.getState().walletAddress || null
+          sendResponse(event.source!, data.id, { address: addr })
           break
+        }
 
         case 'READ_STATE':
           handleReadState(event.source!, data)
           break
 
         case 'OPT_IN':
-        case 'CALL_METHOD':
+        case 'CALL_METHOD': {
+          const payload = data.payload as CallMethodPayload
+          const wallet =
+            activeAddress || useAlgoCraftStore.getState().walletAddress || null
+          if (OPT_IN_METHOD_NAMES.has(payload?.method) && wallet) {
+            void (async () => {
+              try {
+                const already = await isAccountOptedIn(
+                  Number(payload.appId),
+                  wallet
+                )
+                if (already) {
+                  sendResponse(event.source!, data.id, {
+                    success: true,
+                    alreadyOptedIn: true,
+                  })
+                  return
+                }
+              } catch {
+                /* show sign modal */
+              }
+              setPendingRequest({ request: data, source: event.source! })
+            })()
+            break
+          }
           setPendingRequest({ request: data, source: event.source! })
           break
+        }
 
         default:
           sendResponse(event.source!, data.id, null, `Unsupported request type: ${data.type}`)
@@ -68,45 +132,20 @@ export function BridgeHandler() {
   }
 
   const handleReadState = async (source: MessageEventSource, request: BridgeRequest) => {
-    const { appId, address } = request.payload as ReadStatePayload
+    const { appId, address: payloadAddress } = request.payload as ReadStatePayload
+    const address =
+      payloadAddress ||
+      activeAddress ||
+      useAlgoCraftStore.getState().walletAddress ||
+      undefined
     try {
-      const appInfo = await algodClient.getApplicationByID(Number(appId)).do()
-      const globalStateRaw = (appInfo.params as any)['global-state'] || []
-
-      // Decode global state
-      const state: Record<string, any> = {}
-      globalStateRaw.forEach((item: any) => {
-        const key = Buffer.from(item.key, 'base64').toString()
-        const val = item.value
-        if (val.type === 1) {
-          state[key] = val.bytes
-        } else {
-          state[key] = val.uint
-        }
-      })
-
-      // Decode local state if address provided
-      if (address) {
-        try {
-          const accountInfo = await algodClient.accountInformation(address).do()
-          const appsLocalState = (accountInfo as any)['apps-local-state'] || []
-          const appLocal = appsLocalState.find((a: any) => a.id === Number(appId))
-          if (appLocal) {
-            state['__opted_in__'] = true
-            const localKV = appLocal['key-value'] || []
-            localKV.forEach((item: any) => {
-              const key = Buffer.from(item.key, 'base64').toString()
-              const val = item.value
-              state[`local:${key}`] = val.type === 1 ? val.bytes : val.uint
-            })
-          } else {
-            state['__opted_in__'] = false
-          }
-        } catch {
-          state['__opted_in__'] = false
-        }
-      }
-
+      const arc32Spec = useAlgoCraftStore.getState().arc32Spec
+      const state = await readApplicationState(
+        algodClient,
+        appId,
+        address || null,
+        arc32Spec
+      )
       sendResponse(source, request.id, state)
     } catch (err: any) {
       sendResponse(source, request.id, null, err.message)
@@ -171,7 +210,14 @@ export function BridgeHandler() {
       // Route all opt-in variants to a proper OptIn transaction
       const OPT_IN_NAMES = new Set(['__optIn__', 'opt_in', 'optIn', 'opt_in_to_application', 'optInToApplication'])
       if (OPT_IN_NAMES.has(payload.method)) {
-        const txId = await sendOptInTransaction(Number(payload.appId), methods, contractName, params)
+        const appIdNum = Number(payload.appId)
+        const alreadyIn = await isAccountOptedIn(appIdNum, activeAddress as string)
+        if (alreadyIn) {
+          sendResponse(source, request.id, { success: true, alreadyOptedIn: true })
+          setTimeout(() => handleCancel(), 1500)
+          return
+        }
+        const txId = await sendOptInTransaction(appIdNum, methods, contractName, params)
         setSuccessTxId(txId)
         sendResponse(source, request.id, { txId, success: true })
         setTimeout(() => handleCancel(), 3000)
@@ -188,7 +234,7 @@ export function BridgeHandler() {
         try {
           const accountInfo = await algodClient.accountInformation(activeAddress as string).do()
           const appsLocalState = (accountInfo as any)['apps-local-state'] || []
-          const isOptedIn = appsLocalState.some((a: any) => a.id === Number(payload.appId))
+          const isOptedIn = appsLocalState.some((a: any) => sameAppId(a.id, payload.appId))
           if (!isOptedIn) {
             await sendOptInTransaction(Number(payload.appId), methods, contractName, params)
           }
@@ -250,11 +296,26 @@ export function BridgeHandler() {
         }
       })
 
-      // 3. Build Transaction
+      // 3. Build Transaction — onComplete from ARC-32 hints (e.g. OptIn for allowActions: 'OptIn')
+      let onComplete = getMethodOnComplete(payload.method, freshSpec)
+      // If method requires OptIn but account is already opted in, use NoOp (standard post-opt-in calls)
+      if (onComplete === algosdk.OnApplicationComplete.OptInOC) {
+        try {
+          const accountInfo = await algodClient.accountInformation(activeAddress as string).do()
+          const appsLocalState = (accountInfo as any)['apps-local-state'] || []
+          const alreadyOpted = appsLocalState.some((a: any) => sameAppId(a.id, payload.appId))
+          if (alreadyOpted) {
+            onComplete = algosdk.OnApplicationComplete.NoOpOC
+          }
+        } catch {
+          // keep OptIn
+        }
+      }
+
       const txn = algosdk.makeApplicationCallTxnFromObject({
         sender: activeAddress as string,
         appIndex: Number(payload.appId),
-        onComplete: algosdk.OnApplicationComplete.NoOpOC,
+        onComplete,
         appArgs,
         suggestedParams: params,
       })
@@ -388,7 +449,7 @@ export function BridgeHandler() {
                 {callPayload.args.length > 0 && (
                   <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-muted/60">
                     <span>Arguments</span>
-                    <span className="text-foreground">{JSON.stringify(callPayload.args)}</span>
+                    <span className="text-foreground">{safeJsonStringify(callPayload.args)}</span>
                   </div>
                 )}
                 {callPayload.payment && (
