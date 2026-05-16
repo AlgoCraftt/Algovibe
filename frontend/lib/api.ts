@@ -89,6 +89,63 @@ export async function* generateDApp(
   }
 }
 
+export interface FixFrontendRequest {
+  prompt: string
+  files: Record<string, string>
+  preview_error?: string
+  app_id?: string
+}
+
+/**
+ * Patch existing frontend files from a chat follow-up (no contract recompile).
+ */
+export async function* fixFrontend(
+  request: FixFrontendRequest,
+): AsyncGenerator<BuildEvent> {
+  const response = await fetch(`${API_URL}/api/v1/fix-frontend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt: request.prompt,
+      files: request.files,
+      preview_error: request.preview_error,
+      app_id: request.app_id,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('No response body')
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6)
+        if (data) {
+          try {
+            yield JSON.parse(data) as BuildEvent
+          } catch (e) {
+            console.error('Failed to parse fix-frontend event:', e)
+          }
+        }
+      }
+    }
+  }
+}
+
 /**
  * Continue the pipeline after the user has signed the deploy transaction.
  * Streams the remaining React-generation events.

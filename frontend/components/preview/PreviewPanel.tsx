@@ -57,7 +57,7 @@ export function PreviewPanel() {
   const [dirtyFiles, setDirtyFiles] = useState<Record<string, string>>({})
   const [activeFile, setActiveFile] = useState<string | undefined>()
   
-  const { generatedFiles, buildStatus, contractId, walletAddress, setGeneratedFiles, pendingSignature } = useAlgoCraftStore()
+  const { generatedFiles, buildStatus, contractId, walletAddress, setGeneratedFiles, pendingSignature, previewRevision } = useAlgoCraftStore()
   const isAwaitingSignature = buildStatus === 'awaiting_signature'
 
   const handleRefresh = () => {
@@ -76,7 +76,12 @@ export function PreviewPanel() {
   }, [])
 
   const hasFiles = Object.keys(generatedFiles).length > 0
-  const isBuilding = buildStatus !== 'idle' && buildStatus !== 'complete' && buildStatus !== 'error'
+  const isFixingFrontend = buildStatus === 'fixing_frontend'
+  const isBuilding =
+    buildStatus !== 'idle' &&
+    buildStatus !== 'complete' &&
+    buildStatus !== 'error' &&
+    !isFixingFrontend
 
   useEffect(() => {
     if (buildStatus === 'awaiting_signature') {
@@ -237,7 +242,7 @@ export function PreviewPanel() {
             ) : hasFiles || isAwaitingSignature ? (
               <motion.div key="sandpack-preview" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
                 <SandpackPreview
-                  key={refreshKey}
+                  key={`${refreshKey}-${previewRevision}`}
                   files={generatedFiles}
                   contractId={contractId}
                   walletAddress={walletAddress}
@@ -246,6 +251,22 @@ export function PreviewPanel() {
                   activeFile={activeFile}
                   onActiveFileChange={setActiveFile}
                 />
+                {isFixingFrontend && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="absolute inset-0 z-30 flex items-center justify-center bg-background/60 backdrop-blur-sm"
+                  >
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="flex items-center gap-3 rounded-xl border border-border bg-surface/90 px-5 py-3 shadow-lg"
+                    >
+                      <Loader2 className="h-5 w-5 animate-spin text-nb-gold" />
+                      <span className="text-sm font-medium text-foreground">Updating preview…</span>
+                    </motion.div>
+                  </motion.div>
+                )}
               </motion.div>
             ) : (
               <motion.div key="empty-state" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">

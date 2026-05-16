@@ -8,6 +8,7 @@ import json
 import asyncio
 
 from app.agents.orchestrator import run_pipeline, run_pipeline_finalize
+from app.agents.react_agent import fix_frontend_files, ReactGenerationError
 
 router = APIRouter()
 
@@ -60,6 +61,15 @@ class FinalizeRequest(BaseModel):
     package_id: str
 
 
+class FixFrontendRequest(BaseModel):
+    """Patch existing preview frontend without recompiling the contract."""
+
+    prompt: str
+    files: dict
+    preview_error: Optional[str] = None
+    app_id: Optional[str] = None
+
+
 async def finalize_event_generator(build_id: str, package_id: str):
     """Generate SSE events for the finalize (post-deployment) pipeline."""
     try:
@@ -82,6 +92,53 @@ async def finalize_dapp(request: FinalizeRequest):
 
     return StreamingResponse(
         finalize_event_generator(request.build_id, request.package_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def fix_frontend_event_generator(
+    prompt: str,
+    files: dict,
+    preview_error: Optional[str],
+    app_id: Optional[str],
+):
+    """SSE stream for lightweight frontend-only fixes."""
+    try:
+        yield f"data: {json.dumps({'step': 'fixing_frontend', 'message': 'Updating preview code...'})}\n\n"
+        await asyncio.sleep(0.05)
+        patched = await fix_frontend_files(
+            files=files,
+            user_prompt=prompt,
+            preview_error=preview_error,
+            app_id=app_id,
+        )
+        yield f"data: {json.dumps({'step': 'complete', 'message': 'Preview updated.', 'files': patched})}\n\n"
+    except ReactGenerationError as e:
+        yield f"data: {json.dumps({'step': 'error', 'error': str(e), 'message': str(e)})}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'step': 'error', 'error': str(e), 'message': str(e)})}\n\n"
+
+
+@router.post("/fix-frontend")
+async def fix_frontend(request: FixFrontendRequest):
+    """Apply a chat follow-up to existing frontend files only (no contract pipeline)."""
+    if not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="prompt cannot be empty")
+    if not request.files:
+        raise HTTPException(status_code=400, detail="files cannot be empty")
+
+    return StreamingResponse(
+        fix_frontend_event_generator(
+            request.prompt.strip(),
+            request.files,
+            request.preview_error,
+            request.app_id,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

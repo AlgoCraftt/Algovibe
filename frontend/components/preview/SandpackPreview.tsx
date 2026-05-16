@@ -13,6 +13,8 @@ import {
 import { Wallet, ExternalLink, Globe, Copy, Check } from 'lucide-react'
 import { BridgeHandler } from './BridgeHandler'
 import { patchPreviewBridgeFiles } from '@/lib/preview-bridge-hooks'
+import { patchGeneratedFrontendFiles } from '@/lib/fix-use-contract'
+import { useAlgoCraftStore } from '@/lib/store'
 
 interface SandpackPreviewProps {
   files: Record<string, string>
@@ -302,6 +304,33 @@ function SandpackStateSync({
   return null;
 }
 
+/** Report Sandpack compile errors to the store for fix-frontend follow-ups. */
+function SandpackPreviewErrorReporter() {
+  const { sandpack } = useSandpack()
+  const setPreviewError = useAlgoCraftStore((s) => s.setPreviewError)
+  const lastErrorRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    const raw = sandpack.error
+    if (!raw) {
+      if (lastErrorRef.current !== null) {
+        lastErrorRef.current = null
+        setPreviewError(null)
+      }
+      return
+    }
+    const message =
+      typeof raw === 'string'
+        ? raw
+        : (raw as { message?: string }).message || String(raw)
+    if (message === lastErrorRef.current) return
+    lastErrorRef.current = message
+    setPreviewError(message)
+  }, [sandpack.error, setPreviewError])
+
+  return null
+}
+
 function PreviewHeader({ contractId, walletAddress }: { contractId: string | null; walletAddress?: string | null }) {
   const [copied, setCopied] = useState(false)
   const isLive = !!walletAddress
@@ -390,7 +419,7 @@ export function SandpackPreview(props: SandpackPreviewProps) {
       normalizedFiles[normalizedPath] = finalContent
     }
     
-    return normalizedFiles
+    return patchGeneratedFrontendFiles(normalizedFiles)
   }, [files, contractId, walletAddress, excludeBoilerplate])
 
   const sandpackSetup = React.useMemo(() => ({
@@ -422,6 +451,7 @@ export function SandpackPreview(props: SandpackPreviewProps) {
               options={sandpackOptions}
             >
               <SandpackFileWatcher initialFiles={allFiles} onDirtyChange={onDirtyChange} />
+              <SandpackPreviewErrorReporter />
               <SandpackStateSync activeFileProp={activeFile} onActiveFileChange={onActiveFileChange} />
               <div className="absolute inset-0 flex flex-col [&_.sp-layout]:flex-1 [&_.sp-layout]:h-full [&_.sp-layout]:min-h-0 [&_.sp-layout]:!rounded-none [&_.sp-layout]:!border-0 [&_.sp-wrapper]:h-full [&_.sp-wrapper]:min-h-0 [&_.sp-preview-container]:h-full [&_.sp-preview-container]:min-h-0">
                 <SandpackLayout style={{ height: '100%' }}>

@@ -8,7 +8,7 @@ Algorand smart contracts using @txnlab/use-wallet and algosdk.
 import re
 import logging
 import json
-from typing import TypedDict, Dict
+from typing import TypedDict, Dict, Optional
 
 from app.core.llm import generate_completion
 
@@ -324,7 +324,7 @@ def generate_contract_sdk(arc32_spec: dict, package_id: str = "0") -> str:
 
         lines.append(f"        // {name}({ts_args_str}{pay_param})")
         if pay_args:
-            lines.append(f"        {camel_name}: async ({ts_args_str}{', ' if ts_args_str else ''}{pay_field}: number) =>")
+            lines.append(f"        {camel_name}: async ({ts_args_str}) =>")
             lines.append(
                 f"            callMethod({{ method: '{name}', args: [{app_args_str}], app_id: APP_ID, "
                 f"payment: {{ amount: {pay_field} }} }}),"
@@ -613,3 +613,155 @@ export const useContractState = (app_id: number | string) => {
     return { state, loading, error, refresh };
 };
 """
+
+FIX_FRONTEND_SYSTEM_PROMPT = """You fix React/TypeScript files for an Algorand DApp Sandpack preview.
+
+Output ONLY valid JSON (no markdown fences):
+{"files": {"/App.tsx": "full file content", "/hooks/useContract.ts": "..."}}
+
+Rules:
+- Include ONLY files you changed. Paths must start with /.
+- Do NOT modify contract source (.py, .algo.ts) or contract.arc32.json unless the user explicitly asks.
+- Preserve APP_ID in useContract.ts and existing hook method names unless fixing a bug requires changes.
+- Fix compile/runtime errors (duplicate param names, bad imports, TypeScript errors).
+- Apply the user's requested UI or logic changes in App.tsx and related components."""
+
+FRONTEND_FIX_EXTENSIONS = (".tsx", ".ts", ".css", ".jsx", ".js")
+CONTRACT_SOURCE_SUFFIXES = (".py", ".algo.ts")
+
+
+def _normalize_path(path: str) -> str:
+    p = path.replace("\\", "/")
+    return p if p.startswith("/") else f"/{p}"
+
+
+def _is_frontend_fix_target(path: str) -> bool:
+    p = _normalize_path(path).lower()
+    if "contract.arc32" in p:
+        return False
+    if any(p.endswith(s) for s in CONTRACT_SOURCE_SUFFIXES):
+        return False
+    return any(p.endswith(ext) for ext in FRONTEND_FIX_EXTENSIONS)
+
+
+def sanitize_use_contract_ts(code: str) -> str:
+    """Remove duplicate parameter names in async arrow signatures (e.g. payment twice)."""
+    def dedupe_params(match: re.Match) -> str:
+        params = match.group(1)
+        parts = [p.strip() for p in params.split(",") if p.strip()]
+        seen: set[str] = set()
+        unique: list[str] = []
+        for part in parts:
+            name_m = re.match(r"(\w+)\s*:", part)
+            if not name_m:
+                unique.append(part)
+                continue
+            name = name_m.group(1)
+            if name in seen:
+                if name == "payment":
+                    part = re.sub(r"^payment\s*:", "amountMicroAlgos:", part)
+                    name = "amountMicroAlgos"
+                else:
+                    suffix = 2
+                    new_name = f"{name}{suffix}"
+                    while new_name in seen:
+                        suffix += 1
+                        new_name = f"{name}{suffix}"
+                    part = re.sub(r"^\w+\s*:", f"{new_name}:", part)
+                    name = new_name
+            seen.add(name)
+            unique.append(part)
+        return f"async ({', '.join(unique)}) =>"
+
+    return re.sub(r"async\s*\(([^)]*)\)\s*=>", dedupe_params, code)
+
+
+def _apply_deterministic_fixes(files: Dict[str, str]) -> Dict[str, str]:
+    out = dict(files)
+    for path, content in list(out.items()):
+        norm = _normalize_path(path)
+        if norm.endswith("useContract.ts") or path.endswith("useContract.ts"):
+            fixed = sanitize_use_contract_ts(content)
+            if fixed != content:
+                out[path] = fixed
+                if norm != path:
+                    out[norm] = fixed
+    return out
+
+
+def _filter_frontend_files(files: Dict[str, str]) -> Dict[str, str]:
+    return {p: c for p, c in files.items() if _is_frontend_fix_target(p)}
+
+
+def _parse_fix_response(response: str) -> Dict[str, str]:
+    text = response.strip()
+    json_match = re.search(r"\{[\s\S]*\}", text)
+    if json_match:
+        text = json_match.group(0)
+    data = json.loads(text)
+    patched = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(patched, dict):
+        raise ReactGenerationError("LLM fix response missing 'files' object")
+    return {_normalize_path(k): str(v) for k, v in patched.items()}
+
+
+async def fix_frontend_files(
+    files: Dict[str, str],
+    user_prompt: str,
+    preview_error: Optional[str] = None,
+    app_id: Optional[str] = None,
+) -> Dict[str, str]:
+    """Patch frontend files from user follow-up + optional Sandpack/compile error."""
+    base = _apply_deterministic_fixes(files)
+    frontend_subset = _filter_frontend_files(base)
+    if not frontend_subset:
+        raise ReactGenerationError("No frontend files to fix")
+
+    # Fast path: only sanitize when user asks to fix a known duplicate-param error
+    if preview_error and "Argument name clash" in preview_error and not user_prompt.strip():
+        return base
+
+    files_blob = "\n\n".join(
+        f"### {_normalize_path(path)}\n```\n{content[:12000]}\n```"
+        for path, content in frontend_subset.items()
+    )
+    user_parts = [f"USER REQUEST:\n{user_prompt}"]
+    if preview_error:
+        user_parts.append(f"PREVIEW/COMPILE ERROR:\n{preview_error[:4000]}")
+    if app_id:
+        user_parts.append(f"DEPLOYED APP_ID (do not change): {app_id}")
+    user_parts.append(f"CURRENT FRONTEND FILES:\n{files_blob}")
+
+    response = await generate_completion(
+        system_prompt=FIX_FRONTEND_SYSTEM_PROMPT,
+        user_prompt="\n\n".join(user_parts),
+        temperature=0.1,
+        max_tokens=16000,
+    )
+    if not response:
+        raise ReactGenerationError("LLM returned empty fix response")
+
+    try:
+        changed = _parse_fix_response(response)
+    except (json.JSONDecodeError, ReactGenerationError) as e:
+        logger.warning("[REACT_AGENT] Fix JSON parse failed, retrying with stricter prompt: %s", e)
+        retry = await generate_completion(
+            system_prompt=FIX_FRONTEND_SYSTEM_PROMPT + "\n\nCRITICAL: Output raw JSON only. No prose.",
+            user_prompt="\n\n".join(user_parts),
+            temperature=0.0,
+            max_tokens=16000,
+        )
+        if not retry:
+            raise ReactGenerationError("LLM returned empty fix response on retry") from e
+        changed = _parse_fix_response(retry)
+
+    merged = dict(base)
+    for path, content in changed.items():
+        if not _is_frontend_fix_target(path):
+            continue
+        merged[path] = content
+        no_slash = path.lstrip("/")
+        if no_slash != path:
+            merged[no_slash] = content
+
+    return _apply_deterministic_fixes(merged)

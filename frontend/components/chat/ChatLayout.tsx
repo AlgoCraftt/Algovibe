@@ -14,7 +14,11 @@ export function ChatLayout() {
   const { messages, buildStatus } = useAlgoCraftStore()
   
   const isInitialState = messages.length === 0 && buildStatus === 'idle'
-  const isBuilding = buildStatus !== 'idle' && buildStatus !== 'complete' && buildStatus !== 'error'
+  const isBuilding =
+    buildStatus !== 'idle' &&
+    buildStatus !== 'complete' &&
+    buildStatus !== 'error' &&
+    buildStatus !== 'fixing_frontend'
   const isAwaitingSignature = buildStatus === 'awaiting_signature'
 
   return (

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
-import { generateDApp, finalizeDeployment, type BuildEvent, type Protocol, type SuggestedProtocol, fetchProtocols, fetchSuggestedProtocols } from './api'
+import { generateDApp, finalizeDeployment, fixFrontend, type BuildEvent, type Protocol, type SuggestedProtocol, fetchProtocols, fetchSuggestedProtocols } from './api'
 import { patchPreviewBridgeFiles } from './preview-bridge-hooks'
+import { patchGeneratedFrontendFiles } from './fix-use-contract'
 
 export type BuildStep =
   | 'idle'
@@ -11,6 +12,7 @@ export type BuildStep =
   | 'deploying'
   | 'awaiting_signature'
   | 'generating_react'
+  | 'fixing_frontend'
   | 'complete'
   | 'error'
 
@@ -30,6 +32,8 @@ interface AlgoCraftStore {
   contractId: string | null
   isBuilding: boolean
   error: string | null
+  previewError: string | null
+  previewRevision: number
   arc32Spec: any | null
   deploymentCode: string | null
 
@@ -67,6 +71,7 @@ interface AlgoCraftStore {
   setGeneratedFiles: (files: Record<string, string>) => void
   setContractId: (id: string) => void
   setError: (error: string | null) => void
+  setPreviewError: (error: string | null) => void
   loadTestFiles: () => void
   setWalletAddress: (address: string | null) => void
   setPendingSignature: (data: { unsigned_tx: string; buildId: string; framework?: string; approval_teal?: string; clear_teal?: string; arc32_spec?: any } | null) => void
@@ -93,6 +98,8 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
   contractId: null,
   isBuilding: false,
   error: null,
+  previewError: null,
+  previewRevision: 0,
   arc32Spec: null,
   deploymentCode: null,
 
@@ -158,6 +165,10 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
   setError: (error) => {
     set({ error, buildStatus: error ? 'error' : get().buildStatus })
   },
+
+  setPreviewError: (previewError) => {
+    set({ previewError })
+  },
   
   setArc32Spec: (spec) => {
     set({ arc32Spec: spec })
@@ -168,7 +179,29 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
   },
 
   sendPrompt: async (prompt) => {
-    const { addMessage, setBuildStatus, addBuildLog, setGeneratedFiles, setContractId, setError, protocols, selectedProtocols } = get()
+    const state = get()
+    const {
+      addMessage,
+      setBuildStatus,
+      addBuildLog,
+      setGeneratedFiles,
+      setContractId,
+      setError,
+      protocols,
+      selectedProtocols,
+      generatedFiles,
+      buildStatus,
+      previewError,
+      contractId,
+    } = state
+
+    const hasFrontendFiles = Object.keys(generatedFiles).some(
+      (k) => k.endsWith('.tsx') || k.includes('App.tsx') || k.includes('useContract'),
+    )
+    const useFixFrontend =
+      hasFrontendFiles &&
+      (buildStatus === 'complete' || buildStatus === 'error') &&
+      selectedProtocols.length === 0
 
     // Build the enriched prompt with any selected protocols
     let enrichedPrompt = prompt
@@ -189,24 +222,60 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
       }
     }
 
-    // Move selected → integrated and clear selection
-    set((state) => ({
-      isBuilding: true,
-      buildStatus: 'analyzing' as BuildStep,
-      buildLogs: [],
-      error: null,
-      integratedProtocols: Array.from(new Set([...state.integratedProtocols, ...state.selectedProtocols])),
-      selectedProtocols: [],
-    }))
-
-    // Add user message (show clean prompt + protocol tags)
     const displayMsg = protocolNames.length > 0
       ? `${prompt}\n\n[Protocols: ${protocolNames.join(', ')}]`
       : prompt
     addMessage('user', displayMsg)
 
+    if (useFixFrontend) {
+      set({
+        isBuilding: true,
+        buildStatus: 'fixing_frontend',
+        error: null,
+      })
+
+      try {
+        for await (const event of fixFrontend({
+          prompt,
+          files: generatedFiles,
+          preview_error: previewError || undefined,
+          app_id: contractId || undefined,
+        })) {
+          handleBuildEvent(event, {
+            setBuildStatus,
+            addBuildLog,
+            setGeneratedFiles,
+            setContractId,
+            setError,
+            addMessage,
+          })
+        }
+        set((s) => ({
+          isBuilding: false,
+          buildStatus: 'complete',
+          previewError: null,
+          previewRevision: s.previewRevision + 1,
+        }))
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        setError(errorMessage)
+        addMessage('system', `Error: ${errorMessage}`)
+        set({ isBuilding: false, buildStatus: 'complete' })
+      }
+      return
+    }
+
+    // Full pipeline (new DApp or protocol integration)
+    set((s) => ({
+      isBuilding: true,
+      buildStatus: 'analyzing' as BuildStep,
+      buildLogs: [],
+      error: null,
+      integratedProtocols: Array.from(new Set([...s.integratedProtocols, ...s.selectedProtocols])),
+      selectedProtocols: [],
+    }))
+
     try {
-      // Stream build events
       for await (const event of generateDApp({ prompt: enrichedPrompt, user_wallet: get().walletAddress || undefined })) {
         // Capture sign_required payload before passing to handleBuildEvent
         if (event.step === 'sign_required' && event.build_id) {
@@ -260,6 +329,8 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
       contractId: null,
       isBuilding: false,
       error: null,
+      previewError: null,
+      previewRevision: 0,
       pendingSignature: null,
       arc32Spec: null,
       deploymentCode: null,
@@ -505,12 +576,22 @@ function handleBuildEvent(
       if (event.message) addBuildLog(event.message)
       break
 
+    case 'fixing_frontend':
+      setBuildStatus('fixing_frontend')
+      if (event.message) addBuildLog(event.message)
+      break
+
     case 'complete':
       setBuildStatus('complete')
       if (event.files) {
-        setGeneratedFiles(patchPreviewBridgeFiles(event.files))
+        setGeneratedFiles(
+          patchPreviewBridgeFiles(patchGeneratedFrontendFiles(event.files)),
+        )
       }
-      addMessage('assistant', 'Your DApp is ready! Check the preview panel.')
+      addMessage(
+        'assistant',
+        event.message || 'Your DApp is ready! Check the preview panel.',
+      )
       break
 
     case 'error':
