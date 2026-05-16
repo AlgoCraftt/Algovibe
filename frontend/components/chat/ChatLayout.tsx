@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react'
+import React from 'react'
 import { useAlgoCraftStore } from '@/lib/store'
 import { EmptyState } from './EmptyState'
 import { ChatSidebar } from './ChatSidebar'
@@ -8,23 +8,19 @@ import { BuildAnimation } from '@/components/preview/BuildAnimation'
 import { PreviewPanel } from '@/components/preview/PreviewPanel'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Navbar } from '@/components/layout/Navbar'
-import { Maximize2, Minimize2 } from 'lucide-react'
 
 export function ChatLayout() {
   const { messages, buildStatus } = useAlgoCraftStore()
-  
+
   const isInitialState = messages.length === 0 && buildStatus === 'idle'
-  const isBuilding =
-    buildStatus !== 'idle' &&
-    buildStatus !== 'complete' &&
-    buildStatus !== 'error' &&
-    buildStatus !== 'fixing_frontend'
-  const isAwaitingSignature = buildStatus === 'awaiting_signature'
+  const showPreview =
+    buildStatus === 'complete' || buildStatus === 'error' || buildStatus === 'fixing_frontend'
+  const showPipeline = !isInitialState && !showPreview
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground overflow-hidden">
       <Navbar />
-      
+
       <div className="flex flex-1 min-h-0 relative overflow-hidden">
         <AnimatePresence mode="wait">
           {isInitialState ? (
@@ -45,29 +41,33 @@ export function ChatLayout() {
               animate={{ opacity: 1 }}
               className="flex w-full h-full"
             >
-              {/* Sidebar with messages */}
-              <div
-                className="w-[380px] h-full border-r border-border shrink-0 overflow-hidden relative z-10"
-              >
+              <div className="w-[380px] h-full border-r border-border shrink-0 overflow-hidden relative z-10">
                 <ChatSidebar />
               </div>
 
               <div className="flex-1 min-w-0 relative">
-
-                {/* Show build animation while building (not awaiting signature) */}
-                {isBuilding && !isAwaitingSignature && (
-                  <div className="absolute inset-0 flex flex-col">
+                {showPipeline && (
+                  <motion.div
+                    key="pipeline"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 flex flex-col"
+                  >
                     <BuildAnimation />
-                  </div>
+                  </motion.div>
                 )}
 
-                {/* Show preview panel when complete or awaiting signature */}
-                {(!isBuilding || isAwaitingSignature) && (
-                  <div className="absolute inset-0 flex flex-col">
+                {showPreview && (
+                  <motion.div
+                    key="preview"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="absolute inset-0 flex flex-col"
+                  >
                     <PreviewPanel />
-                  </div>
+                  </motion.div>
                 )}
-
               </div>
             </motion.div>
           )}
@@ -76,3 +76,5 @@ export function ChatLayout() {
     </div>
   )
 }
+
+

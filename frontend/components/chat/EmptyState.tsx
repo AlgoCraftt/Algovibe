@@ -3,7 +3,7 @@
 import React from 'react'
 import Image from 'next/image'
 import { motion } from 'framer-motion'
-import { PromptInputBox } from '@/components/ui/ai-prompt-box'
+import { PromptInputBox } from '@/components/ui/prompt-box'
 import { ProtocolChips } from './ProtocolChips'
 import { useAlgoCraftStore } from '@/lib/store'
 

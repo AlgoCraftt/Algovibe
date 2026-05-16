@@ -6,11 +6,11 @@ import {
   SandpackProvider,
   SandpackPreview as SandpackPreviewComponent,
   SandpackCodeEditor,
-  SandpackConsole,
   SandpackLayout,
   useSandpack,
 } from '@codesandbox/sandpack-react'
-import { Wallet, ExternalLink, Globe, Copy, Check } from 'lucide-react'
+import { Wallet, Globe, ExternalLink } from 'lucide-react'
+import { loraApplicationUrl, visibleUserFiles } from '@/lib/sandpack-files'
 import { BridgeHandler } from './BridgeHandler'
 import { patchPreviewBridgeFiles } from '@/lib/preview-bridge-hooks'
 import { patchGeneratedFrontendFiles } from '@/lib/fix-use-contract'
@@ -20,7 +20,7 @@ interface SandpackPreviewProps {
   files: Record<string, string>
   contractId: string | null
   walletAddress?: string | null
-  activeTab?: 'preview' | 'code' | 'console'
+  activeTab?: 'preview' | 'code'
   excludeBoilerplate?: boolean
   onDirtyChange?: (isDirty: boolean, currentFiles: Record<string, string>) => void
   activeFile?: string
@@ -332,19 +332,10 @@ function SandpackPreviewErrorReporter() {
 }
 
 function PreviewHeader({ contractId, walletAddress }: { contractId: string | null; walletAddress?: string | null }) {
-  const [copied, setCopied] = useState(false)
   const isLive = !!walletAddress
   const displayAddress = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : 'ABCD...WXYZ'
-
-  const copyContractId = () => {
-    if (contractId) {
-      navigator.clipboard.writeText(contractId)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }
 
   return (
     <div className="flex items-center justify-between px-3 py-2 bg-neutral-800/50 border-b border-neutral-700/50 text-xs">
@@ -370,19 +361,15 @@ function PreviewHeader({ contractId, walletAddress }: { contractId: string | nul
         </div>
 
         {contractId && contractId !== 'NOT_DEPLOYED' && (
-          <button
-            onClick={copyContractId}
+          <a
+            href={loraApplicationUrl(contractId)}
+            target="_blank"
+            rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-colors"
           >
-             <span className="text-blue-400 font-mono">
-              App ID: {contractId}
-            </span>
-            {copied ? (
-              <Check className="w-3 h-3 text-green-400" />
-            ) : (
-              <Copy className="w-3 h-3 text-blue-400" />
-            )}
-          </button>
+            <span className="text-blue-400 font-mono">App ID: {contractId}</span>
+            <ExternalLink className="w-3 h-3 text-blue-400" />
+          </a>
         )}
       </div>
     </div>
@@ -393,7 +380,6 @@ export function SandpackPreview(props: SandpackPreviewProps) {
   const { files, contractId, walletAddress, activeTab = 'preview', excludeBoilerplate = false, onDirtyChange, activeFile, onActiveFileChange } = props
   
   const showCode = activeTab === 'code'
-  const showConsole = activeTab === 'console'
   const showPreview = activeTab === 'preview'
 
   const allFiles = React.useMemo(() => {
@@ -429,16 +415,13 @@ export function SandpackPreview(props: SandpackPreviewProps) {
   const sandpackOptions = React.useMemo(() => ({
     recompileMode: 'delayed' as const,
     recompileDelay: 500,
-    visibleFiles: (excludeBoilerplate 
-      ? Object.keys(files).map(f => f.startsWith('/') ? f : `/${f}`)
-      : Object.keys(allFiles).filter(f => !f.includes('mock-') && !f.includes('index.tsx') && !f.includes('.css'))
-    ),
-  }), [allFiles, excludeBoilerplate, files, activeFile])
+    visibleFiles: visibleUserFiles(files),
+  }), [files])
 
   return (
     <SandpackErrorBoundary files={allFiles}>
       <div className="h-full w-full flex flex-col">
-        {!showCode && !showConsole && (
+        {!showCode && (
           <PreviewHeader contractId={contractId} walletAddress={walletAddress} />
         )}
 
@@ -468,12 +451,6 @@ export function SandpackPreview(props: SandpackPreviewProps) {
                     <SandpackPreviewComponent
                       showOpenInCodeSandbox={false}
                       showRefreshButton
-                      style={{ height: '100%' }}
-                    />
-                  )}
-                  {showConsole && (
-                    <SandpackConsole
-                      showHeader
                       style={{ height: '100%' }}
                     />
                   )}

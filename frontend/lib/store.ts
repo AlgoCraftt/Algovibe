@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { generateDApp, finalizeDeployment, fixFrontend, type BuildEvent, type Protocol, type SuggestedProtocol, fetchProtocols, fetchSuggestedProtocols } from './api'
 import { patchPreviewBridgeFiles } from './preview-bridge-hooks'
 import { patchGeneratedFrontendFiles } from './fix-use-contract'
+import { formatBuildLog } from './build-log-format'
 
 export type BuildStep =
   | 'idle'
@@ -350,7 +351,12 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
 
   completeDeployment: async (buildId, packageId) => {
     const { setBuildStatus, addBuildLog, setGeneratedFiles, setContractId, setError, addMessage } = get()
-    set({ pendingSignature: null, isBuilding: true })
+    set({
+      pendingSignature: null,
+      isBuilding: true,
+      buildStatus: 'deploying',
+    })
+    addBuildLog('Transaction confirmed — generating your DApp UI…')
 
     try {
       for await (const event of finalizeDeployment(buildId, packageId)) {
@@ -372,9 +378,13 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
       addMessage('system', `Error: ${errorMessage}`)
     }
 
-    set({ isBuilding: false })
+    if (get().buildStatus !== 'complete' && get().buildStatus !== 'error') {
+      set({ isBuilding: false, buildStatus: 'error' })
+    } else {
+      set({ isBuilding: false })
+    }
   },
-  
+
   deployToVercel: async () => {
     set({ isDeployingToVercel: true })
     // Simulate deployment delay
@@ -534,15 +544,16 @@ function handleBuildEvent(
 
     case 'compiling':
       setBuildStatus('compiling')
-      if (event.log) addBuildLog(event.log)
-      if (event.message) addBuildLog(event.message)
+      if (event.log) addBuildLog(formatBuildLog(event.log))
+      if (event.message) addBuildLog(formatBuildLog(event.message))
       break
 
     case 'retrying':
       setBuildStatus('compiling')
       if (event.message) {
-        addBuildLog(`⚠️ ${event.message}`)
-        addMessage('system', `🔄 ${event.message}`)
+        const formatted = formatBuildLog(event.message)
+        addBuildLog(`⚠️ ${formatted}`)
+        addMessage('system', `Compile retry: ${formatted}`)
       }
       break
 
@@ -554,22 +565,27 @@ function handleBuildEvent(
     case 'sign_required':
       setBuildStatus('awaiting_signature')
       if (event.message) addBuildLog(event.message)
-      // Populate generatedFiles with the contract source code so the Code tab can show it
       if (event.contract_code) {
         const ext = event.framework === 'puyapy' ? '.py' : '.algo.ts'
         const filename = (event.contract_filename || 'contract') + ext
-        setGeneratedFiles({
-          [filename]: event.contract_code
-        })
-      }
-      break;
-
-    case 'deployed':
-      if (event.contract_id) {
-        setContractId(event.contract_id)
-        addBuildLog(`Contract deployed: ${event.contract_id}`)
+        setGeneratedFiles({ [filename]: event.contract_code })
       }
       break
+
+    case 'deployed': {
+      setBuildStatus('generating_react')
+      const appId =
+        event.contract_id ||
+        event.package_id ||
+        (event as { app_id?: string | number }).app_id
+      if (appId != null) {
+        setContractId(String(appId))
+        addBuildLog(`Contract deployed on testnet — App ID ${appId}`)
+      } else if (event.message) {
+        addBuildLog(event.message)
+      }
+      break
+    }
 
     case 'generating_react':
       setBuildStatus('generating_react')

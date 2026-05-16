@@ -4,7 +4,7 @@ import React, { useState } from 'react'
 import { useAlgoCraftStore } from '@/lib/store'
 import { MessageList } from './MessageList'
 import { ProtocolsPanel } from './ProtocolsPanel'
-import { PromptInputBox } from '@/components/ui/ai-prompt-box'
+import { PromptInputBox } from '@/components/ui/prompt-box'
 import { 
   MessageSquare, 
   Layers, 

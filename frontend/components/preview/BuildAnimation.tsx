@@ -1,230 +1,202 @@
 'use client'
 
-import React, { useState, useEffect, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import React, { useMemo } from 'react'
+import { motion } from 'framer-motion'
 import { useAlgoCraftStore, type BuildStep } from '@/lib/store'
-import { 
-  Brain, 
-  BookOpen, 
-  Code as CodeIcon, 
-  Hammer, 
-  Rocket, 
-  Layout, 
-  Check, 
+import { DeploySignPrompt } from './DeploySignPrompt'
+import { ContractCodeView } from './ContractCodeView'
+import { formatBuildLog, statusHeadline } from '@/lib/build-log-format'
+import {
+  Brain,
+  BookOpen,
+  Code as CodeIcon,
+  Hammer,
+  Rocket,
+  Layout,
+  Check,
   Terminal,
   Cpu,
-  Layers,
-  Sparkles,
-  PenLine
+  PenLine,
+  AlertCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// ---------------------------------------------------------------------------
-// Helpers & Data
-// ---------------------------------------------------------------------------
-
-const STEPS: { id: BuildStep; label: string; icon: any; color: string }[] = [
-  { id: 'analyzing', label: 'Analyzing', icon: Brain, color: '#8b5cf6' },
-  { id: 'retrieving_docs', label: 'Researching', icon: BookOpen, color: '#3b82f6' },
-  { id: 'generating_contract', label: 'Architecting', icon: CodeIcon, color: '#14b8a6' },
-  { id: 'compiling', label: 'Compiling', icon: Hammer, color: '#f59e0b' },
-  { id: 'deploying', label: 'Deploying', icon: Rocket, color: '#fbbf24' },
-  { id: 'awaiting_signature', label: 'Sign Tx', icon: PenLine, color: '#f59e0b' },
-  { id: 'generating_react', label: 'Finalizing UI', icon: Layout, color: '#22c55e' },
+const STEPS: {
+  id: BuildStep
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+}[] = [
+  { id: 'analyzing', label: 'Analyzing', icon: Brain },
+  { id: 'retrieving_docs', label: 'Researching', icon: BookOpen },
+  { id: 'generating_contract', label: 'Architecting', icon: CodeIcon },
+  { id: 'compiling', label: 'Compiling', icon: Hammer },
+  { id: 'deploying', label: 'Deploying', icon: Rocket },
+  { id: 'awaiting_signature', label: 'Sign Tx', icon: PenLine },
+  { id: 'generating_react', label: 'Finalizing UI', icon: Layout },
 ]
 
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
+const CodeRain = () => {
+  const chars = '01$?.&^*#@!/\\'.split('')
+  return (
+    <motion.div className="absolute inset-0 z-0 opacity-10 flex justify-between px-8 sm:px-16 pointer-events-none overflow-hidden">
+      {[...Array(18)].map((_, i) => (
+        <motion.div
+          key={i}
+          animate={{ y: ['-100%', '200%'] }}
+          transition={{
+            duration: 5 + Math.random() * 5,
+            repeat: Infinity,
+            ease: 'linear',
+            delay: Math.random() * 5,
+          }}
+          className="text-[10px] font-mono text-nb-gold flex flex-col"
+        >
+          {[...Array(28)].map((_, j) => (
+            <span key={j}>{chars[Math.floor(Math.random() * chars.length)]}</span>
+          ))}
+        </motion.div>
+      ))}
+    </motion.div>
+  )
+}
 
 const HexGrid = () => (
   <div className="absolute inset-0 z-0 opacity-20 pointer-events-none overflow-hidden">
-    <div 
+    <div
       className="absolute inset-0 bg-repeat"
       style={{
         backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='104' viewBox='0 0 60 104' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 0l30 17.3v34.6L30 69.3 0 52V17.3L30 0zm0 10l-21.2 12.2v24.4L30 59.3l21.2-12.7V22.2L30 10z' fill='%23f59e0b' fill-opacity='0.2' fill-rule='evenodd'/%3E%3C/svg%3E")`,
-        backgroundSize: '60px 104px'
+        backgroundSize: '60px 104px',
       }}
     />
   </div>
 )
 
-const OrbitalRings = ({ progress }: { progress: number }) => (
-  <div className="relative w-64 h-64 flex items-center justify-center">
-    {/* Outer Ring */}
-    <motion.div 
-      animate={{ rotate: 360 }}
-      transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-      className="absolute inset-0 rounded-full border-2 border-dashed border-nb-gold/20"
-    />
-    {/* Middle Ring */}
-    <motion.div 
-      animate={{ rotate: -360 }}
-      transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-      className="absolute inset-4 rounded-full border border-nb-navy/30 shadow-[0_0_15px_rgba(59,130,246,0.1)]"
-    />
-    {/* Inner Progress Ring */}
-    <svg className="absolute inset-8 w-48 h-48 -rotate-90">
-      <circle
-        cx="96"
-        cy="96"
-        r="80"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="4"
-        className="text-white/5"
-      />
-      <motion.circle
-        cx="96"
-        cy="96"
-        r="80"
-        fill="none"
-        stroke="url(#gold-gradient)"
-        strokeWidth="4"
-        strokeDasharray="502"
-        animate={{ strokeDashoffset: 502 - (502 * progress) / 100 }}
-        transition={{ duration: 1 }}
-        strokeLinecap="round"
-      />
-      <defs>
-        <linearGradient id="gold-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="#f59e0b" />
-          <stop offset="100%" stopColor="#fbbf24" />
-        </linearGradient>
-      </defs>
-    </svg>
-    {/* Center Icon/Percent */}
-    <div className="z-10 flex flex-col items-center">
-       <span className="text-4xl font-black gradient-text">{Math.round(progress)}%</span>
-       <span className="text-[10px] font-bold uppercase tracking-widest text-muted mt-1">Synchronizing</span>
-    </div>
-  </div>
-)
+function stepIndex(status: BuildStep): number {
+  if (status === 'error') return STEPS.findIndex((s) => s.id === 'compiling')
+  const idx = STEPS.findIndex((s) => s.id === status)
+  return idx >= 0 ? idx : 0
+}
 
-const CodeRain = () => {
-  const chars = "01$?.&^*#@!/\\".split("")
+function BuildLogPanel({ logs, isError }: { logs: string[]; isError: boolean }) {
+  const formatted = useMemo(() => logs.map(formatBuildLog), [logs])
+
   return (
-    <div className="absolute inset-0 z-0 opacity-10 flex justify-between px-12 pointer-events-none overflow-hidden">
-      {[...Array(20)].map((_, i) => (
-        <motion.div
-          key={i}
-          animate={{ y: ["-100%", "200%"] }}
-          transition={{ 
-            duration: 5 + Math.random() * 5, 
-            repeat: Infinity, 
-            ease: "linear",
-            delay: Math.random() * 5
-          }}
-          className="text-[10px] font-mono text-nb-gold flex flex-col"
-        >
-          {[...Array(30)].map((_, j) => (
-            <span key={j}>{chars[Math.floor(Math.random() * chars.length)]}</span>
-          ))}
-        </motion.div>
-      ))}
+    <div
+      className={cn(
+        'relative w-full max-w-2xl rounded-2xl border backdrop-blur-xl overflow-hidden',
+        isError ? 'border-nb-red/40 bg-nb-red/5' : 'border-nb-gold/30 bg-surface/40',
+      )}
+    >
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/5">
+        <div className="flex gap-1.5">
+          <div className="w-2.5 h-2.5 rounded-full bg-red-500/40" />
+          <div className="w-2.5 h-2.5 rounded-full bg-amber-500/40" />
+          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/40" />
+        </div>
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted">
+          {isError ? <AlertCircle className="w-3 h-3 text-nb-red" /> : <Terminal className="w-3 h-3" />}
+          <span>{isError ? 'Build log — issue' : 'Build log'}</span>
+        </div>
+      </div>
+      <div className="p-4 font-mono text-xs h-40 sm:h-48 overflow-y-auto scrollbar-thin">
+        <div className="space-y-2">
+          {formatted.length === 0 ? (
+            <span className="text-muted/60">Waiting for pipeline events…</span>
+          ) : (
+            formatted.slice(-12).map((log, i) => (
+              <div
+                key={`${i}-${log.slice(0, 24)}`}
+                className={cn(
+                  'flex gap-2 leading-relaxed',
+                  log.includes('retry') || log.startsWith('⚠️') ? 'text-amber-400/90' : 'text-muted/85',
+                  isError && i === formatted.length - 1 && 'text-nb-red/90',
+                )}
+              >
+                <span className="text-nb-gold/50 shrink-0">[{String(i + 1).padStart(2, '0')}]</span>
+                <span>{log}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   )
 }
 
-const HolographicEditor = ({ logs }: { logs: string[] }) => (
-  <motion.div
-    initial={{ opacity: 0, scale: 0.9, rotateX: 10 }}
-    animate={{ opacity: 1, scale: 1, rotateX: 0 }}
-    className="relative w-full max-w-2xl rounded-2xl border border-nb-gold/30 bg-surface/40 backdrop-blur-xl shadow-[0_0_50px_rgba(245,158,11,0.1)] overflow-hidden"
-  >
-    <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/5">
-      <div className="flex gap-1.5">
-        <div className="w-2.5 h-2.5 rounded-full bg-red-500/40" />
-        <div className="w-2.5 h-2.5 rounded-full bg-amber-500/40" />
-        <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/40" />
-      </div>
-      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted">
-        <Terminal className="w-3 h-3" />
-        <span>Live Deployment Stream</span>
-      </div>
-    </div>
-    
-    <div className="p-6 font-mono text-xs text-muted/80 h-48 overflow-y-auto scrollbar-none">
-      <div className="space-y-1.5">
-        {logs.slice(-8).map((log, i) => (
-          <motion.div 
-            key={i} 
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="flex gap-3"
-          >
-            <span className="text-nb-gold/40 shrink-0 select-none">[{new Date().toLocaleTimeString([], { hour12: false, minute:'2-digit', second:'2-digit' })}]</span>
-            <span className="text-nb-teal/80 mr-2 shrink-0 select-none">λ</span>
-            <span className="truncate">{log}</span>
-          </motion.div>
-        ))}
-        <div className="h-4 w-1 bg-nb-gold/60 animate-pulse inline-block align-middle ml-1" />
-      </div>
-    </div>
-
-    {/* Holographic overlay shimmer */}
-    <div className="absolute inset-0 pointer-events-none bg-gradient-to-br from-white/5 via-transparent to-white/5 opacity-50 mix-blend-overlay" />
-  </motion.div>
-)
-
-// ---------------------------------------------------------------------------
-// Main Component
-// ---------------------------------------------------------------------------
-
 export function BuildAnimation() {
-  const { buildStatus, buildLogs } = useAlgoCraftStore()
-  
-  const currentStepIndex = STEPS.findIndex(s => s.id === buildStatus)
-  const progress = Math.max(5, (currentStepIndex / (STEPS.length - 1)) * 100)
+  const { buildStatus, buildLogs, error, pendingSignature } = useAlgoCraftStore()
+
+  const currentStepIndex = stepIndex(buildStatus)
+  const progress = Math.max(8, Math.min(100, ((currentStepIndex + 0.4) / STEPS.length) * 100))
+  const isAwaitingSignature = buildStatus === 'awaiting_signature'
+  const isError = buildStatus === 'error'
+  const showContract =
+    isAwaitingSignature ||
+    (buildStatus !== 'generating_react' &&
+      buildStatus !== 'analyzing' &&
+      buildStatus !== 'retrieving_docs')
 
   return (
-    <div className="relative w-full h-full flex flex-col items-center justify-center bg-background overflow-hidden perspective-1000">
-      {/* Background visual layers */}
+    <div className="relative w-full h-full flex flex-col overflow-y-auto bg-background">
       <HexGrid />
       <CodeRain />
-      
-      {/* Glow Orbs */}
-      <div className="absolute top-1/4 -left-1/4 w-[600px] h-[600px] bg-nb-gold/5 rounded-full blur-[150px] animate-pulse" />
-      <div className="absolute bottom-1/4 -right-1/4 w-[500px] h-[500px] bg-nb-navy/10 rounded-full blur-[120px] animate-pulse-glow" />
+      <div className="absolute inset-0 z-0 opacity-15 pointer-events-none bg-[radial-gradient(circle_at_50%_0%,rgba(245,158,11,0.12),transparent_50%)]" />
 
-      {/* Main content */}
-      <div className="relative z-10 flex flex-col items-center gap-12">
-        
-        {/* Orbital Progress */}
-        <div className="animate-float">
-          <OrbitalRings progress={progress} />
+      <div className="relative z-10 flex flex-col items-center gap-8 px-4 py-8 max-w-5xl mx-auto w-full">
+        <div className="relative w-52 h-52 flex items-center justify-center">
+          <svg className="absolute inset-4 -rotate-90 w-[calc(100%-2rem)] h-[calc(100%-2rem)]">
+            <circle cx="50%" cy="50%" r="42%" fill="none" stroke="currentColor" strokeWidth="3" className="text-white/5" />
+            <motion.circle
+              cx="50%"
+              cy="50%"
+              r="42%"
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth="3"
+              strokeDasharray="400"
+              animate={{ strokeDashoffset: 400 - (400 * progress) / 100 }}
+              strokeLinecap="round"
+            />
+          </svg>
+          <div className="z-10 flex flex-col items-center">
+            <span className="text-4xl font-black gradient-text">{Math.round(progress)}%</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-muted mt-1">Pipeline</span>
+          </div>
         </div>
 
-        {/* Step Indicators */}
-        <div className="flex flex-wrap justify-center gap-8 px-6">
+        <div className="text-center space-y-1">
+          <h2 className="text-lg font-black tracking-tight text-foreground">{statusHeadline(buildStatus)}</h2>
+          {isError && error && (
+            <p className="text-sm text-nb-red/90 max-w-lg mx-auto">{formatBuildLog(error)}</p>
+          )}
+        </div>
+
+        <div className="flex flex-wrap justify-center gap-4 px-2">
           {STEPS.map((step, i) => {
             const isActive = step.id === buildStatus
-            const isDone = currentStepIndex > i || buildStatus === 'complete'
+            const isDone = currentStepIndex > i
             const Icon = step.icon
-
             return (
-              <div key={step.id} className="flex flex-col items-center gap-3 w-20">
-                <div 
+              <div key={step.id} className="flex flex-col items-center gap-2 w-[4.5rem]">
+                <div
                   className={cn(
-                    "relative w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-500 border",
-                    isActive ? "bg-nb-gold/20 border-nb-gold text-nb-gold shadow-[0_0_20px_rgba(245,158,11,0.3)] scale-110" : 
-                    isDone ? "bg-nb-gold/10 border-nb-gold/30 text-nb-gold" : 
-                    "bg-surface-2 border-border text-muted"
+                    'w-11 h-11 rounded-xl flex items-center justify-center border transition-all',
+                    isActive
+                      ? 'bg-nb-gold/20 border-nb-gold text-nb-gold scale-105'
+                      : isDone
+                        ? 'bg-nb-gold/10 border-nb-gold/30 text-nb-gold'
+                        : 'bg-surface-2 border-border text-muted/45',
                   )}
                 >
                   {isDone ? <Check className="w-5 h-5" /> : <Icon className="w-5 h-5" />}
-                  
-                  {isActive && (
-                    <motion.div
-                      layoutId="step-indicator"
-                      className="absolute -inset-1 rounded-xl border border-nb-gold/50 animate-pulse-glow"
-                    />
-                  )}
                 </div>
-                <span className={cn(
-                  "text-[10px] font-bold tracking-widest uppercase text-center leading-tight",
-                   isActive ? "text-nb-gold" : isDone ? "text-muted/80" : "text-muted/40"
-                )}>
+                <span
+                  className={cn(
+                    'text-[9px] font-bold uppercase tracking-wider text-center',
+                    isActive ? 'text-nb-gold' : isDone ? 'text-muted/75' : 'text-muted/40',
+                  )}
+                >
                   {step.label}
                 </span>
               </div>
@@ -232,18 +204,25 @@ export function BuildAnimation() {
           })}
         </div>
 
-        {/* Live Editor Preview */}
-        <HolographicEditor logs={buildLogs} />
+        {isAwaitingSignature && pendingSignature && (
+          <div className="w-full max-w-2xl space-y-4">
+            <DeploySignPrompt variant="inline" />
+            <ContractCodeView />
+          </div>
+        )}
 
-        {/* Footer Info */}
-        <div className="flex flex-col items-center gap-2">
-           <div className="flex items-center gap-3 px-4 py-1.5 rounded-full bg-surface-2/50 border border-border text-[10px] font-bold uppercase tracking-[0.2em] text-muted">
-              <Cpu className="w-3 h-3 text-nb-gold" />
-              <span>Provisioning Algorand Testnet Node</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-nb-gold animate-pulse" />
-           </div>
+        {showContract && !isAwaitingSignature && <ContractCodeView className="w-full max-w-2xl" />}
+
+        <BuildLogPanel logs={buildLogs} isError={isError} />
+
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted">
+          <Cpu className="w-3 h-3 text-nb-gold" />
+          Algorand Testnet
         </div>
       </div>
     </div>
   )
 }
+
+
+

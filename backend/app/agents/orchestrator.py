@@ -440,8 +440,12 @@ async def run_pipeline(
     state["pending_build_id"] = build_id
     
     yield {
+        "step": "deploying",
+        "message": "Contract compiled successfully. Sign with your wallet to deploy on testnet.",
+    }
+    yield {
         "step": "sign_required",
-        "message": "Click button to build and sign transaction over Pera / Defly",
+        "message": "Waiting for wallet signature…",
         "build_id": build_id,
         "unsigned_tx": unsigned_tx_b64,
         "approval_teal": state.get("approval_teal", ""),
@@ -464,7 +468,12 @@ async def run_pipeline_finalize(build_id: str, app_id: int) -> AsyncGenerator[di
     state["app_id"] = app_id
     state["events"] = []
     
-    yield {"step": "deployed", "message": "Contract deployed!", "app_id": app_id}
+    yield {
+        "step": "deployed",
+        "message": f"Contract live on testnet (App ID {app_id})",
+        "app_id": app_id,
+        "contract_id": str(app_id),
+    }
 
     state = await generate_react_node(state)
     for event in state["events"]: yield event
