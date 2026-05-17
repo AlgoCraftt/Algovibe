@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.api.routes import generate
 from app.api.routes import protocols
 from app.api.routes import publish
+from app.api.routes import llm
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +49,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include routers
 app.include_router(generate.router, prefix="/api/v1", tags=["generate"])
 app.include_router(protocols.router, prefix="/api/v1", tags=["protocols"])
 app.include_router(publish.router, prefix="/api/v1", tags=["publish"])
+app.include_router(llm.router, prefix="/api/v1", tags=["llm"])
 
 
 @app.get("/")

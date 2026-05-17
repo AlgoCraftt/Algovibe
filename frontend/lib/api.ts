@@ -1,4 +1,57 @@
+import { loadLlmSettings } from './llm-settings'
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
+/** Headers for BYOK — sent on every LLM-backed request. */
+export function getLlmHeaders(): Record<string, string> {
+  const settings = loadLlmSettings()
+  if (!settings?.apiKey?.trim() || !settings.validated) {
+    return {}
+  }
+  return {
+    'X-LLM-Provider': settings.provider,
+    'X-LLM-Api-Key': settings.apiKey.trim(),
+    'X-LLM-Model': settings.model,
+  }
+}
+
+function mergeHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    ...getLlmHeaders(),
+    ...extra,
+  }
+}
+
+export interface ValidateLlmRequest {
+  provider: string
+  api_key: string
+  model: string
+}
+
+export async function validateLlmCredentials(request: ValidateLlmRequest): Promise<void> {
+  const response = await fetch(`${API_URL}/api/v1/llm/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+
+  if (response.status === 401) {
+    throw new Error('Invalid API key')
+  }
+  if (!response.ok) {
+    let detail = `HTTP error! status: ${response.status}`
+    try {
+      const data = await response.json()
+      if (data?.detail) {
+        detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(detail)
+  }
+}
 
 export interface GenerateRequest {
   prompt: string
@@ -15,6 +68,7 @@ export interface BuildEvent {
   files?: Record<string, string>
   status?: string
   error?: string
+  error_code?: string
   // Analysis metadata (emitted during the "analyzing" step)
   template_type?: string
   spec?: Record<string, unknown>
@@ -40,9 +94,7 @@ export async function* generateDApp(
 ): AsyncGenerator<BuildEvent> {
   const response = await fetch(`${API_URL}/api/v1/generate`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: mergeHeaders(),
     body: JSON.stringify({
       prompt: request.prompt,
       network: request.network || 'testnet',
@@ -119,7 +171,7 @@ export async function* fixFrontend(
 ): AsyncGenerator<BuildEvent> {
   const response = await fetch(`${API_URL}/api/v1/fix-frontend`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: mergeHeaders(),
     body: JSON.stringify({
       prompt: request.prompt,
       files: request.files,
@@ -186,7 +238,7 @@ export async function* finalizeDeployment(
 ): AsyncGenerator<BuildEvent> {
   const response = await fetch(`${API_URL}/api/v1/finalize`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: mergeHeaders(),
     body: JSON.stringify({ build_id: buildId, package_id: packageId }),
   })
 
@@ -381,7 +433,7 @@ export async function fetchSuggestedProtocols(
   try {
     const response = await fetch(`${API_URL}/api/v1/protocols/suggest`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: mergeHeaders(),
       body: JSON.stringify({
         template_type: templateType,
         contract_spec: contractSpec,

@@ -3,10 +3,13 @@
 import json
 import re
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 
+from app.api.deps import llm_request_context, read_llm_headers
+from app.core.llm import InvalidApiKeyError, generate_completion
+from app.core.llm_config import LlmConfig
 from app.protocols.registry import (
     get_all_protocols,
     get_protocol_by_id,
@@ -14,8 +17,6 @@ from app.protocols.registry import (
     get_categories,
     get_protocol_summary_for_llm,
 )
-from app.core.llm import generate_completion
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -83,7 +84,10 @@ async def list_categories():
 
 
 @router.post("/protocols/suggest", response_model=SuggestResponse)
-async def suggest_protocols(request: SuggestRequest):
+async def suggest_protocols(
+    request: SuggestRequest,
+    llm_config: Optional[LlmConfig] = Depends(read_llm_headers),
+):
     """
     Use AI to suggest 2-3 protocols that would complement the user's
     current DApp.  The response includes a short reason for each suggestion.
@@ -116,14 +120,14 @@ Already integrated protocols: {', '.join(request.current_protocols) if request.c
 Suggest 2-3 protocols from the list above. Return ONLY the JSON array:"""
 
     try:
-        response = await generate_completion(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.3,
-            max_tokens=2048,
-        )
+        with llm_request_context(llm_config):
+            response = await generate_completion(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.3,
+                max_tokens=2048,
+            )
 
-        # Parse LLM response
         json_match = re.search(r'\[[\s\S]*\]', response)
         if not json_match:
             logger.warning("[PROTOCOLS] Could not parse LLM suggestion response")
@@ -149,6 +153,8 @@ Suggest 2-3 protocols from the list above. Return ONLY the JSON array:"""
         logger.info(f"[PROTOCOLS] Suggested {len(suggestions)} protocols")
         return SuggestResponse(suggestions=suggestions)
 
+    except InvalidApiKeyError:
+        raise HTTPException(status_code=401, detail="Invalid API key")
     except Exception as e:
         logger.error(f"[PROTOCOLS] Suggestion failed: {e}")
         return SuggestResponse(suggestions=[])

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { generateDApp, finalizeDeployment, fixFrontend, type BuildEvent, type Protocol, type SuggestedProtocol, fetchProtocols, fetchSuggestedProtocols } from './api'
+import { isLlmConfigured } from './llm-settings'
 import { patchPreviewBridgeFiles } from './preview-bridge-hooks'
 import { patchGeneratedFrontendFiles } from './fix-use-contract'
 import { formatBuildLog } from './build-log-format'
@@ -180,6 +181,14 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
   },
 
   sendPrompt: async (prompt) => {
+    if (!isLlmConfigured()) {
+      get().addMessage(
+        'system',
+        'Add your API key in AI Settings (top right) before building.',
+      )
+      return
+    }
+
     const state = get()
     const {
       addMessage,
@@ -610,10 +619,16 @@ function handleBuildEvent(
       )
       break
 
-    case 'error':
-      setError(event.error || event.message || 'Unknown error')
-      addMessage('system', `Error: ${event.error || event.message}`)
+    case 'error': {
+      const msg =
+        event.error_code === 'invalid_api_key'
+          ? 'Invalid API key. Open AI Settings and verify your key.'
+          : event.error || event.message || 'Unknown error'
+      setBuildStatus('error')
+      setError(msg)
+      addMessage('system', `Error: ${msg}`)
       break
+    }
 
     case 'deployment_code_ready':
       if (event.deployment_code) {

@@ -23,6 +23,7 @@ from app.agents.react_agent import generate_react_frontend
 from app.services.compiler_client import CompilerClient
 from app.services.deployment_generator import DeploymentGenerator
 from app.services.build_store import save_build, load_build, delete_build
+from app.core.llm import InvalidApiKeyError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -127,6 +128,8 @@ async def analyze_node(state: PipelineState) -> PipelineState:
             "template_type": result["template_type"],
             "spec": result["spec"],
         })
+    except InvalidApiKeyError:
+        raise
     except Exception as e:
         logger.error(f"[ORCHESTRATOR] Analysis failed for prompt '{state['prompt'][:50]}...': {e}", exc_info=True)
         state["error"] = f"Specification analysis failed: {str(e)}"
@@ -188,6 +191,8 @@ async def generate_contract_node(state: PipelineState) -> PipelineState:
         state["contract_filename"] = result["filename"]
         state["error"] = None # IMPORTANT: Clear error so the retry loop can continue
         state["events"].append({"step": "generating_contract", "message": "Contract code ready"})
+    except InvalidApiKeyError:
+        raise
     except Exception as e:
         logger.error(f"Contract generation failed: {e}")
         state["error"] = str(e)
@@ -314,6 +319,8 @@ async def generate_react_node(state: PipelineState) -> PipelineState:
             "files": result["files"],
             "status": "ready"
         })
+    except InvalidApiKeyError:
+        raise
     except Exception as e:
         logger.error(f"Frontend generation failed: {e}")
         state["error"] = str(e)

@@ -44,6 +44,8 @@ export function EmptyState() {
         className="text-muted text-lg max-w-lg mb-10 leading-relaxed font-sans"
       >
         Describe your DApp in plain English. From DeFi to NFTs, I&apos;ll handle the code and deployment.
+        {' '}
+        <span className="text-nb-gold/90">Add your API key via AI Settings (top right) first.</span>
       </motion.p>
 
       <motion.div
