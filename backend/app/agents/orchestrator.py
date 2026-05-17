@@ -151,7 +151,7 @@ async def retrieve_contract_docs_node(state: PipelineState) -> PipelineState:
         await asyncio.sleep(1.5) # Simulate RAG work
         docs = [] # Disconnected
         state["contract_docs"] = docs
-        state["events"].append({"step": "retrieving_docs", "message": "Found 7 relevant sections"})
+        state["events"].append({"step": "retrieving_docs", "message": f"Retrieved {len(docs)} relevant sections"})
     except Exception as e:
         logger.warning(f"Doc retrieval failed: {e}")
         state["contract_docs"] = []
@@ -317,6 +317,10 @@ async def generate_react_node(state: PipelineState) -> PipelineState:
     except Exception as e:
         logger.error(f"Frontend generation failed: {e}")
         state["error"] = str(e)
+        state["events"].append({
+            "step": "error",
+            "message": f"Frontend generation failed: {str(e)}",
+        })
 
     return state
 
@@ -477,5 +481,8 @@ async def run_pipeline_finalize(build_id: str, app_id: int) -> AsyncGenerator[di
 
     state = await generate_react_node(state)
     for event in state["events"]: yield event
-    
+
+    if state.get("error"):
+        yield {"step": "error", "message": state["error"]}
+
     delete_build(build_id)

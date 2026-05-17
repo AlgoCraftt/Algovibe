@@ -31,11 +31,15 @@ export function ExportButton() {
         '/index.tsx',
         '/lib/algorand.ts',
       ])
-      for (const [path, content] of Object.entries(generatedFiles)) {
-        if (boilerplateFiles.has(path)) continue
-        const filePath = path.startsWith('/') ? path.slice(1) : path
-        zip.file(`src/${filePath}`, content)
-      }
+  for (const [path, content] of Object.entries(generatedFiles)) {
+    if (boilerplateFiles.has(path)) continue
+    let fileContent = content
+    if (path.includes('useContract') && contractId) {
+      fileContent = content.replace(/export const APP_ID = \d+/, `export const APP_ID = ${contractId}`)
+    }
+    const filePath = path.startsWith('/') ? path.slice(1) : path
+    zip.file(`src/${filePath}`, fileContent)
+  }
 
       if (arc32Spec) {
         zip.file('src/contract.arc32.json', JSON.stringify(arc32Spec, null, 2))

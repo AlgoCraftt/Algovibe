@@ -66,6 +66,7 @@ export function BridgeHandler() {
 
       // Filter for AlgoCraft bridge requests
       if (!data || typeof data !== 'object' || !data.id || !data.type) return
+      if (!event.source) return
 
       console.log(`[BridgeHandler] Received request: ${data.type}`, data.payload)
 
@@ -73,12 +74,12 @@ export function BridgeHandler() {
         case 'GET_ADDRESS': {
           const addr =
             activeAddress || useAlgoCraftStore.getState().walletAddress || null
-          sendResponse(event.source!, data.id, { address: addr })
+          sendResponse(event.source, data.id, { address: addr })
           break
         }
 
         case 'READ_STATE':
-          handleReadState(event.source!, data)
+          handleReadState(event.source, data)
           break
 
         case 'OPT_IN':
@@ -112,13 +113,13 @@ export function BridgeHandler() {
         }
 
         default:
-          sendResponse(event.source!, data.id, null, `Unsupported request type: ${data.type}`)
+          sendResponse(event.source, data.id, null, `Unsupported request type: ${data.type}`)
       }
     }
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [activeAddress])
+  }, [activeAddress, transactionSigner, algodClient])
 
   // Helpers
   const sendResponse = (source: MessageEventSource, id: string, result: any, error?: string) => {

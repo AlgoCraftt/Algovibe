@@ -10,15 +10,7 @@ function ThemeSync() {
 
   useEffect(() => {
     const root = document.documentElement
-    // Force dark mode for redesign
-    root.classList.add('dark')
-    // Also sync from store if needed later
-    if (theme === 'dark') {
-      root.classList.add('dark')
-    } else {
-      // In this redesign, we are dark-only, so we'll likely keep this forced
-      root.classList.add('dark')
-    }
+    root.classList.toggle('dark', theme === 'dark')
   }, [theme])
 
   return null

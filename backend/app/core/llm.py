@@ -40,12 +40,16 @@ class LLMClient:
             self.model = model or settings.openrouter_model
             self._client = None # Will be initialized as OpenAI client
             logger.info(f"[LLM] Using OpenRouter provider with model {self.model}")
-        else:
+        elif settings.anthropic_api_key:
             self.provider = "anthropic"
             self.api_key = api_key or settings.anthropic_api_key
             self.model = model or settings.claude_model
             self._client = None # Will be initialized as Anthropic client
             logger.info(f"[LLM] Using direct Anthropic provider with model {self.model}")
+        else:
+            raise ValueError(
+                "No LLM API key configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in your environment."
+            )
 
     def _get_client(self) -> Any:
         """Get or create the appropriate client"""

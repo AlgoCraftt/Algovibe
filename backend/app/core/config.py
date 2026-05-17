@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     claude_model: str = "claude-3-5-sonnet-20240620"
     
     openrouter_api_key: str = ""
-    openrouter_model: str
+    openrouter_model: str = "anthropic/claude-3.5-sonnet"
 
     # Embeddings (sentence-transformers, local)
     embedding_model: str = "all-MiniLM-L6-v2"

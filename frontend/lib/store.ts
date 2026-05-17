@@ -387,11 +387,11 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
 
   deployToVercel: async () => {
     set({ isDeployingToVercel: true })
-    // Simulate deployment delay
-    await new Promise(r => setTimeout(r, 4000))
-    set({ 
-      isDeployingToVercel: false, 
-      vercelUrl: `https://algocraft-dapp-${Math.floor(Math.random()*10000)}.vercel.app` 
+    // TODO: Replace with real Vercel API integration using VERCEL_API_TOKEN
+    await new Promise(r => setTimeout(r, 2000))
+    set({
+      isDeployingToVercel: false,
+      vercelUrl: null,
     })
   },
 

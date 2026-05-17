@@ -9,6 +9,7 @@ has signed and submitted the deploy transaction). Survives Uvicorn reloads.
 import time
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -16,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 # Store sessions in a local JSON file
 STORE_FILE = Path(__file__).resolve().parent.parent.parent / "build_sessions.json"
-_TTL = 3600  # 1 hour
+_TTL = 3600 # 1 hour
+
+_file_lock = threading.Lock()
 
 
 def _load_all() -> dict:
@@ -40,14 +43,36 @@ def _save_all(data: dict) -> None:
 
 def save_build(build_id: str, state: dict) -> None:
     """Persist pipeline state keyed by build_id."""
-    data = _load_all()
-    # Ensure events and other complex objects are JSON serializable
-    serializable_state = {
-        **state,
-        "_saved_at": time.time()
-    }
-    data[build_id] = serializable_state
-    _save_all(data)
+    with _file_lock:
+        data = _load_all()
+        serializable_state = {
+            **state,
+            "_saved_at": time.time()
+        }
+        data[build_id] = serializable_state
+        _save_all(data)
+
+
+def load_build(build_id: str) -> Optional[dict]:
+    """Return saved state, or None if expired / not found."""
+    with _file_lock:
+        data = _load_all()
+        entry = data.get(build_id)
+        if not entry:
+            return None
+
+        if time.time() - entry.get("_saved_at", 0) > _TTL:
+            delete_build(build_id)
+            return None
+        return entry
+
+
+def delete_build(build_id: str) -> None:
+    with _file_lock:
+        data = _load_all()
+        if build_id in data:
+            del data[build_id]
+            _save_all(data)
 
 
 def load_build(build_id: str) -> Optional[dict]:

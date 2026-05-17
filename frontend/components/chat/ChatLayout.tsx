@@ -14,7 +14,7 @@ export function ChatLayout() {
 
   const isInitialState = messages.length === 0 && buildStatus === 'idle'
   const showPreview =
-    buildStatus === 'complete' || buildStatus === 'error' || buildStatus === 'fixing_frontend'
+    buildStatus === 'complete' || buildStatus === 'error' || buildStatus === 'fixing_frontend' || buildStatus === 'awaiting_signature'
   const showPipeline = !isInitialState && !showPreview
 
   return (

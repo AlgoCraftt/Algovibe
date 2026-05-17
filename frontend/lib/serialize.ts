@@ -1,8 +1,10 @@
 /** Coerce algod uint fields (may be bigint in algosdk v3) to number for UI/postMessage. */
-export function coerceUint(value: unknown): number | string | boolean {
+export function coerceUint(value: unknown): number {
   if (typeof value === 'bigint') return Number(value)
   if (typeof value === 'number') return value
-  return value as number
+  const n = Number(value)
+  if (Number.isNaN(n)) throw new TypeError(`coerceUint: cannot coerce ${typeof value} to number`)
+  return n
 }
 
 /** Compare app IDs from algod (often bigint) with UI/app_id (number). */

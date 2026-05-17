@@ -64,11 +64,26 @@ export async function* generateDApp(
 
   while (true) {
     const { done, value } = await reader.read()
-    
-    if (done) break
+
+    if (done) {
+      if (buffer.trim()) {
+        const remaining = buffer.trim()
+        if (remaining.startsWith('data: ')) {
+          const data = remaining.slice(6)
+          if (data) {
+            try {
+              yield JSON.parse(data) as BuildEvent
+            } catch (e) {
+              console.error('Failed to parse final event:', e)
+            }
+          }
+        }
+      }
+      break
+    }
 
     buffer += decoder.decode(value, { stream: true })
-    
+
     // Parse SSE events
     const lines = buffer.split('\n')
     buffer = lines.pop() || ''
@@ -125,7 +140,22 @@ export async function* fixFrontend(
 
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
+    if (done) {
+      if (buffer.trim()) {
+        const remaining = buffer.trim()
+        if (remaining.startsWith('data: ')) {
+          const data = remaining.slice(6)
+          if (data) {
+            try {
+              yield JSON.parse(data) as BuildEvent
+            } catch (e) {
+              console.error('Failed to parse fix-frontend event:', e)
+            }
+          }
+        }
+      }
+      break
+    }
 
     buffer += decoder.decode(value, { stream: true })
     const lines = buffer.split('\n')
@@ -172,7 +202,22 @@ export async function* finalizeDeployment(
 
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
+    if (done) {
+      if (buffer.trim()) {
+        const remaining = buffer.trim()
+        if (remaining.startsWith('data: ')) {
+          const data = remaining.slice(6)
+          if (data) {
+            try {
+              yield JSON.parse(data) as BuildEvent
+            } catch {
+              // ignore malformed events
+            }
+          }
+        }
+      }
+      break
+    }
 
     buffer += decoder.decode(value, { stream: true })
     const lines = buffer.split('\n')
