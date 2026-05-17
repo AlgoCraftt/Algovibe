@@ -324,7 +324,10 @@ def generate_contract_sdk(arc32_spec: dict, package_id: str = "0") -> str:
 
         lines.append(f"        // {name}({ts_args_str}{pay_param})")
         if pay_args:
-            lines.append(f"        {camel_name}: async ({ts_args_str}) =>")
+            pay_sig = ts_args_str
+            if not pay_sig and pay_args:
+                pay_sig = f"{pay_field}: number"
+            lines.append(f"        {camel_name}: async ({pay_sig}) =>")
             lines.append(
                 f"            callMethod({{ method: '{name}', args: [{app_args_str}], app_id: APP_ID, "
                 f"payment: {{ amount: {pay_field} }} }}),"
@@ -710,6 +713,7 @@ async def fix_frontend_files(
     user_prompt: str,
     preview_error: Optional[str] = None,
     app_id: Optional[str] = None,
+    system_prompt: Optional[str] = None,
 ) -> Dict[str, str]:
     """Patch frontend files from user follow-up + optional Sandpack/compile error."""
     base = _apply_deterministic_fixes(files)
@@ -732,8 +736,9 @@ async def fix_frontend_files(
         user_parts.append(f"DEPLOYED APP_ID (do not change): {app_id}")
     user_parts.append(f"CURRENT FRONTEND FILES:\n{files_blob}")
 
+    sys_prompt = system_prompt or FIX_FRONTEND_SYSTEM_PROMPT
     response = await generate_completion(
-        system_prompt=FIX_FRONTEND_SYSTEM_PROMPT,
+        system_prompt=sys_prompt,
         user_prompt="\n\n".join(user_parts),
         temperature=0.1,
         max_tokens=16000,
@@ -746,7 +751,7 @@ async def fix_frontend_files(
     except (json.JSONDecodeError, ReactGenerationError) as e:
         logger.warning("[REACT_AGENT] Fix JSON parse failed, retrying with stricter prompt: %s", e)
         retry = await generate_completion(
-            system_prompt=FIX_FRONTEND_SYSTEM_PROMPT + "\n\nCRITICAL: Output raw JSON only. No prose.",
+            system_prompt=sys_prompt + "\n\nCRITICAL: Output raw JSON only. No prose.",
             user_prompt="\n\n".join(user_parts),
             temperature=0.0,
             max_tokens=16000,

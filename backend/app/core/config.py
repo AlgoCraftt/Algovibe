@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     algorand_indexer_mainnet: str = "https://mainnet-idx.algonode.cloud"
     default_network: str = "testnet"
 
+    # Testnet simulation (post-deploy happy path; requires funded account)
+    simulate_enabled: bool = True
+    algorand_simulator_mnemonic: str = ""
+
     # Supported frameworks (PuyaPy + PuyaTs are primary; TealScript is legacy/migration only)
     supported_frameworks: list[str] = ["puyapy", "puyats", "tealscript"]
 

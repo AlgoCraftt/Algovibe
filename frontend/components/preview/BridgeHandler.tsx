@@ -21,6 +21,12 @@ const OPT_IN_METHOD_NAMES = new Set([
   'opt_in_to_application',
   'optInToApplication',
 ])
+
+/** ARC-4 `pay` args are satisfied by a grouped payment txn, not payload.args */
+function isPayAbiType(typeStr: string): boolean {
+  const t = typeStr.toLowerCase()
+  return t === 'pay' || t === 'payment'
+}
 import { motion, AnimatePresence } from 'framer-motion'
 import { ShieldAlert, Check, X, Loader2, ExternalLink, Wallet } from 'lucide-react'
 
@@ -245,14 +251,21 @@ export function BridgeHandler() {
       }
 
       const method = contract.getMethodByName(payload.method)
+      const abiMethodArgs = method.args.filter((a) => !isPayAbiType(a.type.toString()))
+      const payMethodArgs = method.args.filter((a) => isPayAbiType(a.type.toString()))
 
-      // 1.5 Validate arguments against ABI
-      if (payload.args.length !== method.args.length) {
-        throw new Error(`Method '${method.name}' expects ${method.args.length} arguments, but received ${payload.args.length}.`)
+      // 1.5 Validate arguments against ABI (pay args use payload.payment, not args[])
+      if (payload.args.length !== abiMethodArgs.length) {
+        throw new Error(
+          `Method '${method.name}' expects ${abiMethodArgs.length} arguments, but received ${payload.args.length}.`
+        )
+      }
+      if (payMethodArgs.length > 0 && (!payload.payment || payload.payment.amount <= 0)) {
+        throw new Error(`Method '${method.name}' requires a payment amount (microAlgos).`)
       }
 
       payload.args.forEach((arg, i) => {
-        const argSpec = method.args[i]
+        const argSpec = abiMethodArgs[i]
         const typeStr = argSpec.type.toString()
         if (typeStr === 'uint64') {
           if (typeof arg !== 'number' && isNaN(Number(arg))) {
@@ -269,7 +282,7 @@ export function BridgeHandler() {
       const appArgs: Uint8Array[] = [method.getSelector()]
 
       payload.args.forEach((arg, i) => {
-        const argSpec = method.args[i]
+        const argSpec = abiMethodArgs[i]
         const typeStr = argSpec.type.toString()
         if (typeStr === 'uint64' || typeStr.startsWith('uint')) {
           appArgs.push(algosdk.encodeUint64(BigInt(arg)))

@@ -18,8 +18,11 @@ import {
   Cpu,
   PenLine,
   AlertCircle,
+  Route,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { PathCheckPanel } from './PathCheckPanel'
+import { SimulationPanel } from './SimulationPanel'
 
 const STEPS: {
   id: BuildStep
@@ -33,6 +36,8 @@ const STEPS: {
   { id: 'deploying', label: 'Deploying', icon: Rocket },
   { id: 'awaiting_signature', label: 'Sign Tx', icon: PenLine },
   { id: 'generating_react', label: 'Finalizing UI', icon: Layout },
+  { id: 'verifying_paths', label: 'Path check', icon: Route },
+  { id: 'simulating', label: 'Simulate', icon: Route },
 ]
 
 const CodeRain = () => {
@@ -125,7 +130,8 @@ function BuildLogPanel({ logs, isError }: { logs: string[]; isError: boolean }) 
 }
 
 export function BuildAnimation() {
-  const { buildStatus, buildLogs, error, pendingSignature } = useAlgoCraftStore()
+  const { buildStatus, buildLogs, error, pendingSignature, pathReport, simulationReport } =
+    useAlgoCraftStore()
 
   const currentStepIndex = stepIndex(buildStatus)
   const progress = Math.max(8, Math.min(100, ((currentStepIndex + 0.4) / STEPS.length) * 100))
@@ -134,6 +140,8 @@ export function BuildAnimation() {
   const showContract =
     isAwaitingSignature ||
     (buildStatus !== 'generating_react' &&
+      buildStatus !== 'verifying_paths' &&
+      buildStatus !== 'simulating' &&
       buildStatus !== 'analyzing' &&
       buildStatus !== 'retrieving_docs')
 
@@ -212,6 +220,18 @@ export function BuildAnimation() {
         )}
 
         {showContract && !isAwaitingSignature && <ContractCodeView className="w-full max-w-2xl" />}
+
+        {pathReport && pathReport.steps.length > 0 && (
+          <div className="w-full max-w-2xl">
+            <PathCheckPanel report={pathReport} compact />
+          </div>
+        )}
+
+        {simulationReport && (
+          <div className="w-full max-w-2xl">
+            <SimulationPanel report={simulationReport} compact />
+          </div>
+        )}
 
         <BuildLogPanel logs={buildLogs} isError={isError} />
 

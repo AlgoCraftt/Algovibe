@@ -1,6 +1,8 @@
 'use client'
 
 import { useAlgoCraftStore, type BuildStep } from '@/lib/store'
+import { PathCheckPanel } from './PathCheckPanel'
+import { SimulationPanel } from './SimulationPanel'
 import { DeploySignPrompt } from './DeploySignPrompt'
 import { cn } from '@/lib/utils'
 import {
@@ -28,10 +30,12 @@ const STEPS: { id: BuildStep; label: string; icon: any; color: string; descripti
   { id: 'deploying', label: 'Deploying', icon: Rocket, color: '#fbbf24', description: 'Broadcasting to Algorand Testnet' },
   { id: 'awaiting_signature', label: 'Sign Tx', icon: PenLine, color: '#f59e0b', description: 'Awaiting signature from connected wallet' },
   { id: 'generating_react', label: 'Finalizing UI', icon: Layout, color: '#22c55e', description: 'Compiling React frontend resources' },
+  { id: 'verifying_paths', label: 'Path check', icon: Activity, color: '#a855f7', description: 'Maze-style UI → contract wiring verification' },
 ]
 
 export function BuildStatusExpanded() {
-  const { buildStatus, buildLogs, contractId, error } = useAlgoCraftStore()
+  const { buildStatus, buildLogs, contractId, error, pathReport, simulationReport } =
+    useAlgoCraftStore()
   const currentIndex = STEPS.findIndex((s) => s.id === buildStatus)
 
   return (
@@ -142,6 +146,13 @@ export function BuildStatusExpanded() {
               <span className="text-[9px] font-mono text-muted uppercase tracking-tight">Listening for events...</span>
             </div>
           </div>
+
+          {pathReport && pathReport.steps.length > 0 && (
+            <div className="px-6 pt-4 shrink-0 space-y-3">
+              <PathCheckPanel report={pathReport} compact />
+              {simulationReport && <SimulationPanel report={simulationReport} compact />}
+            </div>
+          )}
 
           <div className="flex-1 overflow-y-auto p-6 font-mono text-xs scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent">
             {buildLogs.length === 0 ? (

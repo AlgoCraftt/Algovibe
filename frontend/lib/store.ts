@@ -14,9 +14,46 @@ export type BuildStep =
   | 'deploying'
   | 'awaiting_signature'
   | 'generating_react'
+  | 'verifying_paths'
+  | 'simulating'
   | 'fixing_frontend'
   | 'complete'
   | 'error'
+
+export interface PathStepView {
+  id: string
+  label: string
+  status: string
+  message: string
+  file?: string
+  fix_hint?: string
+}
+
+export interface PathReport {
+  open_paths: number
+  total_paths: number
+  score: number
+  steps: PathStepView[]
+  blockages: PathStepView[]
+  warnings: PathStepView[]
+  abi_methods?: string[]
+  hook_exports?: string[]
+}
+
+export interface SimulationReport {
+  enabled: boolean
+  skipped_reason?: string | null
+  passed: number
+  total: number
+  score: number
+  steps: Array<{
+    id: string
+    label: string
+    status: string
+    message: string
+    method?: string
+  }>
+}
 
 export interface Message {
   id: string
@@ -38,6 +75,8 @@ interface AlgoCraftStore {
   previewRevision: number
   arc32Spec: any | null
   deploymentCode: string | null
+  pathReport: PathReport | null
+  simulationReport: SimulationReport | null
 
   // Wallet state
   walletAddress: string | null
@@ -81,6 +120,8 @@ interface AlgoCraftStore {
   deployToVercel: () => Promise<void>
   setArc32Spec: (spec: any | null) => void
   setDeploymentCode: (code: string | null) => void
+  setPathReport: (report: PathReport | null) => void
+  setSimulationReport: (report: SimulationReport | null) => void
 
   // Protocol actions
   setSidebarTab: (tab: 'chat' | 'protocols') => void
@@ -104,6 +145,8 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
   previewRevision: 0,
   arc32Spec: null,
   deploymentCode: null,
+  pathReport: null,
+  simulationReport: null,
 
   // Wallet state
   walletAddress: null,
@@ -178,6 +221,14 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
 
   setDeploymentCode: (code) => {
     set({ deploymentCode: code })
+  },
+
+  setPathReport: (pathReport) => {
+    set({ pathReport })
+  },
+
+  setSimulationReport: (simulationReport) => {
+    set({ simulationReport })
   },
 
   sendPrompt: async (prompt) => {
@@ -314,6 +365,8 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
           setContractSpec: (s: Record<string, unknown>) => set({ contractSpec: s }),
           setArc32Spec: (s: any) => set({ arc32Spec: s }),
           setDeploymentCode: (c: string) => set({ deploymentCode: c }),
+          setPathReport: (r) => set({ pathReport: r }),
+          setSimulationReport: (r) => set({ simulationReport: r }),
         })
       }
 
@@ -344,6 +397,8 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
       pendingSignature: null,
       arc32Spec: null,
       deploymentCode: null,
+      pathReport: null,
+      simulationReport: null,
       isDeployingToVercel: false,
       vercelUrl: null,
       // Wallet state intentionally preserved across reset
@@ -379,6 +434,8 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
         }, {
           setArc32Spec: (s: any) => set({ arc32Spec: s }),
           setDeploymentCode: (c: string) => set({ deploymentCode: c }),
+          setPathReport: (r) => set({ pathReport: r }),
+          setSimulationReport: (r) => set({ simulationReport: r }),
         })
       }
     } catch (error) {
@@ -523,10 +580,12 @@ function handleBuildEvent(
     setContractSpec?: (s: Record<string, unknown>) => void
     setArc32Spec?: (s: any) => void
     setDeploymentCode?: (c: string) => void
+    setPathReport?: (r: PathReport | null) => void
+    setSimulationReport?: (r: SimulationReport | null) => void
   }
 ) {
   const { setBuildStatus, addBuildLog, setGeneratedFiles, setContractId, setError, addMessage } = actions
-  const { setArc32Spec, setDeploymentCode } = extras || {}
+  const { setArc32Spec, setDeploymentCode, setPathReport, setSimulationReport } = extras || {}
 
   switch (event.step) {
     case 'analyzing':
@@ -601,6 +660,33 @@ function handleBuildEvent(
       if (event.message) addBuildLog(event.message)
       break
 
+    case 'verifying_paths':
+      setBuildStatus('verifying_paths')
+      if (event.message) addBuildLog(event.message)
+      break
+
+    case 'path_check_complete':
+    case 'path_check_warning': {
+      if ((event as { path_report?: PathReport }).path_report) {
+        setPathReport?.((event as { path_report: PathReport }).path_report)
+      }
+      if (event.message) addBuildLog(event.message)
+      break
+    }
+
+    case 'simulating':
+      setBuildStatus('simulating')
+      if (event.message) addBuildLog(event.message)
+      break
+
+    case 'simulation_complete': {
+      if (event.simulation_report) {
+        setSimulationReport?.(event.simulation_report as SimulationReport)
+      }
+      if (event.message) addBuildLog(event.message)
+      break
+    }
+
     case 'fixing_frontend':
       setBuildStatus('fixing_frontend')
       if (event.message) addBuildLog(event.message)
@@ -608,6 +694,12 @@ function handleBuildEvent(
 
     case 'complete':
       setBuildStatus('complete')
+      if ((event as { path_report?: PathReport }).path_report) {
+        setPathReport?.((event as { path_report: PathReport }).path_report)
+      }
+      if (event.simulation_report) {
+        setSimulationReport?.(event.simulation_report as SimulationReport)
+      }
       if (event.files) {
         setGeneratedFiles(
           patchPreviewBridgeFiles(patchGeneratedFrontendFiles(event.files)),

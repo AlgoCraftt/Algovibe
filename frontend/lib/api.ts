@@ -83,6 +83,46 @@ export interface BuildEvent {
   contract_code?: string
   contract_filename?: string
   deployment_code?: string
+  path_report?: {
+    open_paths: number
+    total_paths: number
+    score: number
+    steps: Array<{
+      id: string
+      label: string
+      status: string
+      message: string
+      file?: string
+      fix_hint?: string
+    }>
+    blockages: Array<{
+      id: string
+      label: string
+      status: string
+      message: string
+      fix_hint?: string
+    }>
+    warnings?: Array<{
+      id: string
+      label: string
+      status: string
+      message: string
+    }>
+  }
+  simulation_report?: {
+    enabled: boolean
+    skipped_reason?: string | null
+    passed: number
+    total: number
+    score: number
+    steps: Array<{
+      id: string
+      label: string
+      status: string
+      message: string
+      method?: string
+    }>
+  }
 }
 
 /**

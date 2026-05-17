@@ -23,6 +23,8 @@ from app.agents.react_agent import generate_react_frontend
 from app.services.compiler_client import CompilerClient
 from app.services.deployment_generator import DeploymentGenerator
 from app.services.build_store import save_build, load_build, delete_build
+from app.services.dapp_path_repair import verify_and_repair_dapp
+from app.services.dapp_simulator import simulate_dapp_on_testnet
 from app.core.llm import InvalidApiKeyError
 
 # Configure logging
@@ -313,12 +315,75 @@ async def generate_react_node(state: PipelineState) -> PipelineState:
             arc32_spec=state.get("arc32_spec")
         )
         state["react_files"] = result["files"]
+
         state["events"].append({
+            "step": "verifying_paths",
+            "message": "Tracing UI → contract paths (maze check)…",
+        })
+
+        repaired_files, path_report = await verify_and_repair_dapp(
+            files=state["react_files"],
+            spec=state.get("contract_spec") or {},
+            arc32_spec=state.get("arc32_spec"),
+            contract_code=state.get("contract_code", ""),
+            app_id=state.get("app_id"),
+        )
+        state["react_files"] = repaired_files
+
+        path_dict = path_report.to_dict()
+        open_n = path_dict["open_paths"]
+        total_n = path_dict["total_paths"]
+        blockage_n = len(path_dict["blockages"])
+
+        state["events"].append({
+            "step": "path_check_complete",
+            "message": f"Path check: {open_n}/{total_n} routes open"
+            + (f" ({blockage_n} blockages remaining)" if blockage_n else " — all critical paths clear"),
+            "path_report": path_dict,
+        })
+
+        if path_report.has_critical_blockages:
+            state["events"].append({
+                "step": "path_check_warning",
+                "message": "Some wiring issues remain — preview may need manual fix. See path report.",
+                "path_report": path_dict,
+            })
+
+        sim_dict = None
+        app_id = state.get("app_id")
+        if app_id and int(app_id) > 0:
+            state["events"].append({
+                "step": "simulating",
+                "message": "Simulating happy-path transactions on testnet…",
+            })
+            sim_report = await asyncio.to_thread(
+                simulate_dapp_on_testnet,
+                int(app_id),
+                state.get("arc32_spec") or {},
+                state.get("contract_spec") or {},
+            )
+            sim_dict = sim_report.to_dict()
+            sim_msg = (
+                f"Simulation: {sim_dict['passed']}/{sim_dict['total']} passed"
+                if sim_dict.get("enabled")
+                else (sim_dict.get("skipped_reason") or "Simulation skipped")
+            )
+            state["events"].append({
+                "step": "simulation_complete",
+                "message": sim_msg,
+                "simulation_report": sim_dict,
+            })
+
+        complete_event = {
             "step": "complete",
             "message": "DApp ready!",
-            "files": result["files"],
-            "status": "ready"
-        })
+            "files": state["react_files"],
+            "status": "ready",
+            "path_report": path_dict,
+        }
+        if sim_dict is not None:
+            complete_event["simulation_report"] = sim_dict
+        state["events"].append(complete_event)
     except InvalidApiKeyError:
         raise
     except Exception as e:

@@ -69,6 +69,10 @@ export function statusHeadline(status: string): string {
       return 'Sign in your wallet to deploy'
     case 'generating_react':
       return 'Building React preview & hooks'
+    case 'verifying_paths':
+      return 'Tracing UI → contract paths'
+    case 'simulating':
+      return 'Simulating on testnet (happy path)'
     case 'fixing_frontend':
       return 'Applying your changes'
     case 'complete':
