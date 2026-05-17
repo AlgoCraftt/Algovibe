@@ -70,7 +70,13 @@ coverage/
 .claude/
 connect-wallet-starter-v2/
 backend/knowledge/algorand-agent-skills/
+# Ignore stray markdown except project documentation
 *.md
+!README.md
+!ARCHITECTURE.md
+!CONTRIBUTING.md
+!ROUND3_PLAYBOOK.md
+!docs/**/*.md
 tmp/
 
 generated/
