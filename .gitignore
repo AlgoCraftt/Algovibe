@@ -75,8 +75,8 @@ backend/knowledge/algorand-agent-skills/
 !README.md
 !ARCHITECTURE.md
 !CONTRIBUTING.md
-!ROUND3_PLAYBOOK.md
 !docs/**/*.md
+ROUND3_PLAYBOOK.md
 tmp/
 
 generated/

@@ -41,7 +41,6 @@ Full setup (compiler, simulation, BYOK, troubleshooting): **[docs/SETUP.md](docs
 | [docs/SMART_CONTRACTS.md](docs/SMART_CONTRACTS.md) | Puya generation, ABI, pay methods, opt-in, examples |
 | [docs/API.md](docs/API.md) | HTTP API reference and SSE steps |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Commit conventions and repo structure |
-| [ROUND3_PLAYBOOK.md](ROUND3_PLAYBOOK.md) | Team playbook (GTM, pilots, Round 3 checklist) |
 
 ---
 
