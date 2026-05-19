@@ -135,17 +135,6 @@ SSE steps: `verifying_paths`, `path_check_complete`.
 | `backend/app/rag/` | ChromaDB retriever (optional; may be stubbed) |
 | `backend/scripts/index_algorand_docs.py` | Index docs into vector store |
 
----
-
-## Example walkthrough: Tip Jar
-
-**Prompt:** “Tip jar on testnet — users send ALGO tips to the contract.”
-
-1. **Spec** — methods: `tip(pay)`, optional `withdraw` (admin), global `total_tips`.
-2. **Compile** — ARC-32 lists `tip` with one `pay` arg.
-3. **Deploy** — user signs create; `APP_ID` injected into generated files.
-4. **UI** — amount input + “Send tip” → `tip(microAlgos)`.
-5. **Bridge** — payment txn + app call; keys stay in parent wallet.
 
 ---
 
