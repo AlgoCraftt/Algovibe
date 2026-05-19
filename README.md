@@ -36,6 +36,7 @@ Full setup (compiler, simulation, BYOK, troubleshooting): **[docs/SETUP.md](docs
 
 | Document | Description |
 |----------|-------------|
+| [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) | **Hackseries3 suite**, sibling projects, agents, flowcharts |
 | [docs/SETUP.md](docs/SETUP.md) | Environment variables, wallet, compiler, BYOK, testnet simulation |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System design, pipeline, Sandpack bridge, folder layout |
 | [docs/SMART_CONTRACTS.md](docs/SMART_CONTRACTS.md) | Puya generation, ABI, pay methods, opt-in, examples |

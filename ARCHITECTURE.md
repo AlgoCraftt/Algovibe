@@ -2,7 +2,7 @@
 
 This document describes **how Algovibe turns natural language into a deployable Algorand dApp with a live in-browser preview**. It covers the full stack: FastAPI backend agents, SSE streaming, wallet-signed deployment, Sandpack iframe preview, and the parent↔iframe **bridge** that executes real on-chain transactions without putting private keys inside generated code.
 
-**Related docs:** [README.md](README.md) · [docs/SETUP.md](docs/SETUP.md) · [docs/SMART_CONTRACTS.md](docs/SMART_CONTRACTS.md) · [docs/API.md](docs/API.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
+**Related docs:** [README.md](README.md) · [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) · [docs/SETUP.md](docs/SETUP.md) · [docs/SMART_CONTRACTS.md](docs/SMART_CONTRACTS.md) · [docs/API.md](docs/API.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 
