@@ -1,7 +1,17 @@
 import React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ArrowUp, Square, X } from "lucide-react";
+import {
+  ArrowUp,
+  BrainCog,
+  FolderCog,
+  Globe,
+  Mic,
+  Paperclip,
+  Square,
+  StopCircle,
+  X,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // Utility function for className merging

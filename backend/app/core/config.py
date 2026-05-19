@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "anthropic/claude-3.5-sonnet"
 
+    # Local OpenAI-compatible LLM (Ollama, LM Studio, vLLM)
+    ollama_base_url: str = ""
+    ollama_model: str = "llama3.2"
+    llm_provider: str = ""  # optional: ollama | openrouter | anthropic | openai
+
     # Embeddings (sentence-transformers, local)
     embedding_model: str = "all-MiniLM-L6-v2"
 

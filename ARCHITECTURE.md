@@ -807,7 +807,8 @@ Typical variables:
 
 | Variable | Role |
 |----------|------|
-| `OPENROUTER_API_KEY` / OpenAI | LLM calls in `llm.py` |
+| `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` | Cloud LLM in `llm.py` |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local LLM via Ollama (OpenAI-compatible API); see [docs/SETUP.md](docs/SETUP.md#local-llm-with-ollama-docker-or-native) |
 | `COMPILER_SERVER_URL` | Puya compile HTTP service |
 | `DATABASE_URL` | Optional persistence |
 

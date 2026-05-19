@@ -35,7 +35,7 @@ export function formatBuildLog(raw: string): string {
   if (trimmed.startsWith('⚠️')) return trimmed
 
   const retry = trimmed.match(
-    /Compilation error \(retry (\d+)\/(\d+)\):\s*(.+)/is,
+    /Compilation error \(retry (\d+)\/(\d+)\):\s*([\s\S]+)/i,
   )
   if (retry) {
     const [, n, max, err] = retry

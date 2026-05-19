@@ -76,8 +76,8 @@ async def health():
         "status": "healthy",
         "app": settings.app_name,
         "version": settings.app_version,
-        "llm": "claude",
-        "model": settings.claude_model,
+        "llm": "ollama" if settings.ollama_base_url else "claude",
+        "model": settings.ollama_model if settings.ollama_base_url else settings.claude_model,
         "algorand_network": settings.default_network,
         "algorand_testnet_url": settings.algorand_testnet_url,
     }

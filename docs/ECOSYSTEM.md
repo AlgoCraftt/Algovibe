@@ -458,7 +458,8 @@ quadrantChart
 | Variable | Used by | Purpose |
 |----------|---------|---------|
 | `COMPILER_SERVER_URL` | AlgoVibe backend | Puya compile HTTP base |
-| `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` | Agents | Server-side LLM |
+| `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` | Agents | Cloud LLM (`llm.py`) |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Agents | Local Ollama — [SETUP.md](SETUP.md#local-llm-with-ollama-docker-or-native) |
 | `NEXT_PUBLIC_API_URL` | Frontend | FastAPI base |
 | `ALGORAND_*_URL` | Bridge, simulator | algod / indexer |
 | `SIMULATE_ENABLED`, `ALGORAND_SIMULATOR_MNEMONIC` | Simulator | Post-deploy checks |
@@ -487,6 +488,7 @@ Local minimal stack for AlgoVibe:
 | `services/dapp_path_verifier.py` | UI ↔ contract wiring audit |
 | `services/dapp_simulator.py` | Testnet happy path |
 | `api/routes/generate.py` | SSE `/generate`, `/finalize` |
+| `core/llm.py` | OpenRouter, Anthropic, Ollama (OpenAI-compatible) |
 
 ### Frontend
 

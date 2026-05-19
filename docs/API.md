@@ -38,7 +38,7 @@ Starts the full build pipeline. Response is **Server-Sent Events** (`text/event-
 
 | Header | Description |
 |--------|-------------|
-| `X-LLM-Provider` | `openrouter` \| `openai` \| `anthropic` |
+| `X-LLM-Provider` | `openrouter` \| `openai` \| `anthropic` (BYOK; Ollama is server `.env` only — see [SETUP.md](SETUP.md#local-llm-with-ollama-docker-or-native)) |
 | `X-LLM-Api-Key` | User API key |
 | `X-LLM-Model` | Model ID for provider |
 
@@ -118,9 +118,21 @@ Patches preview files only (no recompile/redeploy).
 
 ## LLM validation
 
+### Server-side LLM (no BYOK headers)
+
+When the backend `.env` sets `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`, or `ANTHROPIC_API_KEY`, agents use that provider automatically. Ollama uses the OpenAI-compatible endpoint (`/v1/chat/completions`); see [SETUP.md](SETUP.md#local-llm-with-ollama-docker-or-native).
+
+| Variable | Provider |
+|----------|----------|
+| `OLLAMA_BASE_URL` | Local Ollama (Docker: `http://host.docker.internal:11434` or `http://ollama:11434`) |
+| `OPENROUTER_API_KEY` | OpenRouter |
+| `ANTHROPIC_API_KEY` | Anthropic |
+
+BYOK headers below **override** server env for that request.
+
 ### `POST /api/v1/llm/validate`
 
-Validates BYOK credentials before chat generation.
+Validates BYOK credentials before chat generation (cloud providers only; not used for server-configured Ollama).
 
 **Request body:**
 

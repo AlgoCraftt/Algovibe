@@ -6,7 +6,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-LlmProvider = Literal["openrouter", "openai", "anthropic"]
+LlmProvider = Literal["openrouter", "openai", "anthropic", "ollama"]
 
 _llm_config_var: ContextVar[Optional["LlmConfig"]] = ContextVar("llm_config", default=None)
 
@@ -16,6 +16,7 @@ class LlmConfig:
     provider: LlmProvider
     api_key: str
     model: str
+    base_url: Optional[str] = None
 
 
 def set_llm_config(config: Optional[LlmConfig]) -> Token:
@@ -34,8 +35,10 @@ def parse_provider(value: Optional[str]) -> Optional[LlmProvider]:
     if not value:
         return None
     normalized = value.strip().lower()
-    if normalized in ("openrouter", "openai", "anthropic", "claude"):
-        return "anthropic" if normalized == "claude" else normalized  # type: ignore[return-value]
+    if normalized in ("openrouter", "openai", "anthropic", "claude", "ollama"):
+        if normalized == "claude":
+            return "anthropic"
+        return normalized  # type: ignore[return-value]
     return None
 
 

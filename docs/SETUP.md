@@ -51,6 +51,34 @@ docker compose down
 docker compose --profile compiler up --build
 ```
 
+### Local LLM with Ollama (Docker or native)
+
+AlgoVibe uses Ollama’s **OpenAI-compatible API**. Set `OLLAMA_BASE_URL` in `.env` — no cloud API key needed.
+
+| Scenario | `OLLAMA_BASE_URL` |
+|----------|-------------------|
+| `uvicorn` on host, Ollama on host | `http://127.0.0.1:11434` |
+| Backend in Docker, Ollama on host | `http://host.docker.internal:11434` |
+| Both in Compose | `http://ollama:11434` |
+
+```bash
+ollama pull llama3.2
+```
+
+```env
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_MODEL=llama3.2
+```
+
+Bundled Ollama service:
+
+```bash
+docker compose --profile ollama up --build
+docker compose exec ollama ollama pull llama3.2
+```
+
+Use capable code models (`llama3.2`, `qwen2.5-coder`, `codellama`). BYOK in the UI overrides server env for that session.
+
 ---
 
 ## 1. Environment configuration
@@ -66,7 +94,7 @@ Edit `.env` at the **repository root** (loaded by `backend/app/core/config.py`).
 | Variable | Purpose |
 |----------|---------|
 | `COMPILER_SERVER_URL` | HTTP endpoint that compiles Puya TS/Python to TEAL + ARC-32 |
-| `OPENROUTER_API_KEY` **or** `ANTHROPIC_API_KEY` | Server-side LLM when user does not use BYOK |
+| `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, or `OLLAMA_BASE_URL` | Server-side LLM when user does not use BYOK |
 
 ### Recommended for demos
 

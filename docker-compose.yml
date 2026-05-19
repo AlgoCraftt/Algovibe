@@ -1,7 +1,10 @@
 # AlgoVibe — one-command local stack
 #
-#   cp .env.example .env   # add OPENROUTER_API_KEY or ANTHROPIC_API_KEY
+#   cp .env.example .env   # add OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OLLAMA_BASE_URL
 #   docker compose up --build
+#
+# Local LLM (Ollama on host): OLLAMA_BASE_URL=http://host.docker.internal:11434
+# Bundled Ollama: docker compose --profile ollama up --build
 #
 # App:     http://localhost:3000/chat
 # API:     http://localhost:8000/health
@@ -21,8 +24,13 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       COMPILER_SERVER_URL: ${COMPILER_SERVER_URL:-https://compiler.algocraft.fun}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
@@ -59,3 +67,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+  # Local LLM — pull a model after start: docker exec -it algovibe-ollama-1 ollama pull llama3.2
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama-data:

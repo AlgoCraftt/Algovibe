@@ -24,6 +24,14 @@ from app.core.llm_config import LlmConfig, get_llm_config
 logger = logging.getLogger(__name__)
 
 
+def _normalize_openai_base_url(url: str) -> str:
+    """Ensure base URL ends with /v1 for OpenAI-compatible servers (Ollama, etc.)."""
+    base = url.strip().rstrip("/")
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
 class InvalidApiKeyError(Exception):
     """Raised when the provider rejects the API key."""
 
@@ -71,6 +79,18 @@ class LLMClient:
         if cfg is not None:
             return cls(cfg)
 
+        provider_override = (settings.llm_provider or "").strip().lower()
+        if provider_override == "ollama" or settings.ollama_base_url.strip():
+            base = settings.ollama_base_url.strip() or "http://127.0.0.1:11434"
+            return cls(
+                LlmConfig(
+                    provider="ollama",
+                    api_key="ollama",
+                    model=settings.ollama_model,
+                    base_url=_normalize_openai_base_url(base),
+                )
+            )
+
         if settings.openrouter_api_key:
             return cls(
                 LlmConfig(
@@ -89,18 +109,18 @@ class LLMClient:
             )
         raise ValueError(
             "No LLM configured. Add your API key in AI Settings, or set "
-            "OPENROUTER_API_KEY / ANTHROPIC_API_KEY on the server."
+            "OLLAMA_BASE_URL, OPENROUTER_API_KEY, or ANTHROPIC_API_KEY on the server."
         )
 
     def _get_client(self) -> Any:
         if self._client is not None:
             return self._client
 
-        if self.provider in ("openrouter", "openai"):
+        if self.provider in ("openrouter", "openai", "ollama"):
             if OpenAI is None:
                 raise ImportError("openai package not installed. Run 'pip install openai'")
             kwargs: dict[str, Any] = {
-                "api_key": self.api_key,
+                "api_key": self.api_key or "ollama",
                 "timeout": self.timeout,
                 "max_retries": 0,
             }
@@ -110,6 +130,8 @@ class LLMClient:
                     "HTTP-Referer": "https://algocraft.ai",
                     "X-Title": "AlgoCraft",
                 }
+            elif self.config.base_url:
+                kwargs["base_url"] = self.config.base_url
             self._client = OpenAI(**kwargs)
         else:
             if Anthropic is None:
@@ -146,7 +168,7 @@ class LLMClient:
         stream: bool = False,
     ) -> str:
         try:
-            if self.provider in ("openrouter", "openai"):
+            if self.provider in ("openrouter", "openai", "ollama"):
                 return await self._generate_openai_compatible(prompt, system, temperature, max_tokens)
             return await self._generate_anthropic(prompt, system, temperature, max_tokens)
         except InvalidApiKeyError:
