@@ -1,0 +1,61 @@
+# AlgoVibe — one-command local stack
+#
+#   cp .env.example .env   # add OPENROUTER_API_KEY or ANTHROPIC_API_KEY
+#   docker compose up --build
+#
+# App:     http://localhost:3000/chat
+# API:     http://localhost:8000/health
+#
+# Optional bundled Puya compiler (Hackseries3 monorepo only):
+#   docker compose --profile compiler up --build
+#   Then set COMPILER_SERVER_URL=http://compiler:3000 in .env
+
+name: algovibe
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      COMPILER_SERVER_URL: ${COMPILER_SERVER_URL:-https://compiler.algocraft.fun}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Local Puya compiler — only when sibling ../compilerserver exists
+  compiler:
+    profiles: ["compiler"]
+    build:
+      context: ../compilerserver
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s

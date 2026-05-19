@@ -14,6 +14,43 @@ This guide gets AlgoVibe running locally for development and demos.
 | **Algorand wallet** | Pera, Defly, Exodus, or Lute on **testnet** |
 | **LLM API key** | OpenRouter, OpenAI, or Anthropic — server `.env` and/or BYOK in UI |
 
+### Docker (optional)
+
+| Requirement | Notes |
+|-------------|--------|
+| **Docker Desktop** | Runs backend + frontend with one command |
+| **Compiler** | Defaults to `compiler.algocraft.fun`; optional local compiler via compose profile |
+
+---
+
+## 0. Docker one-command install
+
+```bash
+cp .env.example .env
+# Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY (unless using BYOK only)
+
+docker compose up --build
+```
+
+Windows: `.\install.ps1` (creates `.env` if missing, starts detached).
+
+| URL | Service |
+|-----|---------|
+| http://localhost:3000/chat | Frontend |
+| http://localhost:8000/health | Backend API |
+
+```bash
+docker compose logs -f
+docker compose down
+```
+
+**Local compiler** (requires `../compilerserver` in Hackseries3):
+
+```bash
+# .env: COMPILER_SERVER_URL=http://compiler:3000
+docker compose --profile compiler up --build
+```
+
 ---
 
 ## 1. Environment configuration

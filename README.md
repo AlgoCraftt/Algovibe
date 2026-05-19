@@ -8,6 +8,33 @@ Private keys never enter generated preview code. Transactions are signed in the 
 
 ## Quick start
 
+### Option A — Docker (one command)
+
+Requires [Docker Desktop](https://docs.docker.com/desktop/).
+
+```powershell
+# Windows
+.\install.ps1
+```
+
+```bash
+# macOS / Linux
+chmod +x install.sh && ./install.sh
+```
+
+Or manually:
+
+```bash
+cp .env.example .env   # add OPENROUTER_API_KEY or ANTHROPIC_API_KEY
+docker compose up --build
+```
+
+Open **http://localhost:3000/chat**. API: **http://localhost:8000/health**.
+
+Optional local compiler (Hackseries3 monorepo): set `COMPILER_SERVER_URL=http://compiler:3000` in `.env`, then `docker compose --profile compiler up --build`.
+
+### Option B — Local dev
+
 ```bash
 # 1. Clone and configure
 cp .env.example .env
@@ -37,7 +64,7 @@ Full setup (compiler, simulation, BYOK, troubleshooting): **[docs/SETUP.md](docs
 | Document | Description |
 |----------|-------------|
 | [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) | **Hackseries3 suite**, sibling projects, agents, flowcharts |
-| [docs/SETUP.md](docs/SETUP.md) | Environment variables, wallet, compiler, BYOK, testnet simulation |
+| [docs/SETUP.md](docs/SETUP.md) | Environment variables, wallet, compiler, BYOK, Docker, testnet simulation |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System design, pipeline, Sandpack bridge, folder layout |
 | [docs/SMART_CONTRACTS.md](docs/SMART_CONTRACTS.md) | Puya generation, ABI, pay methods, opt-in, examples |
 | [docs/API.md](docs/API.md) | HTTP API reference and SSE steps |

@@ -2,6 +2,7 @@
 const path = require('path')
 
 const nextConfig = {
+  output: 'standalone',
   reactStrictMode: true,
   transpilePackages: ['@codesandbox/sandpack-react', '@codesandbox/sandpack-client'],
   // Enable experimental features for better performance
