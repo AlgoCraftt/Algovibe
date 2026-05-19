@@ -24,10 +24,12 @@ frontend/tsconfig.tsbuildinfo
 frontend/tsc_error.txt
 frontend/package-lock.json
 
-# ── Environment ──────────────────────────────────────────────────────────────
+# ── Environment (never commit secrets / mnemonics) ───────────────────────────
 .env
 .env.local
 .env.*.local
+**/.env
+**/.env.local
 
 # ── Build outputs ────────────────────────────────────────────────────────────
 backend/builds/*
