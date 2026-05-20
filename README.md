@@ -52,7 +52,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000/chat**, connect a testnet wallet (Pera / Defly / etc.), enter a prompt, sign the app-create transaction when asked, then use the Sandpack preview.
+Open **http://localhost:3000/chat**, connect a testnet wallet (Pera / Defly / Lute /etc.), enter a prompt, sign the app-create transaction when asked, then use the Sandpack preview.
 
 **Success looks like:** pipeline reaches `complete`, preview loads, buttons trigger wallet prompts, Lora link shows your app ID.
 
@@ -69,7 +69,6 @@ Full setup (compiler, simulation, BYOK, troubleshooting): **[docs/SETUP.md](docs
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System design, pipeline, Sandpack bridge, folder layout |
 | [docs/SMART_CONTRACTS.md](docs/SMART_CONTRACTS.md) | Puya generation, ABI, pay methods, opt-in, examples |
 | [docs/API.md](docs/API.md) | HTTP API reference and SSE steps |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Commit conventions and repo structure |
 
 ---
 
@@ -94,13 +93,6 @@ Prompt → analyzing → generating_contract → compiling → sign_required
   → verifying_paths → (simulating) → complete → Sandpack preview
 ```
 
----
-
-## Submission / review branch
-
-For hackathon and jury review, use branch **`release/round3`** — documentation and review-friendly commit history on top of `master`.
-
-**Submission pack (demo script, GTM, persona, integrations):** [docs/submission/](docs/submission/)
 
 ```bash
 git checkout release/round3
