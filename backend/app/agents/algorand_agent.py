@@ -532,40 +532,106 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
                 return f"""## GOLDEN SKELETON FOR x402 SERVICE CONTRACT (follow this structure exactly)
 
 ```typescript
-// This contract acts as an on-chain payment registry for an x402-gated API service.
-// The actual x402 protocol flow (402 response → client pays → facilitator settles) 
-// happens off-chain via middleware. This contract records payments and tracks access.
+// This contract is the ON-CHAIN payment verifier + accounting layer for an x402-gated API.
+// It verifies REAL payment transactions in the atomic group — not just trusted input.
+// 
+// x402 flow: Client pays → Facilitator groups payment + app call → Contract verifies payment in group
+//
+// KEY SECURITY PATTERN: record_payment MUST verify a real AssetTransfer/Payment 
+// exists in the same atomic transaction group using gtxn. This makes it trustless.
 
-import {{ Contract, GlobalState, abimethod, uint64, Txn, Global, Uint64, Bytes, assert, Account, itxn }} from '@algorandfoundation/algorand-typescript'
+import {{ Contract, GlobalState, abimethod, uint64, Txn, Global, Uint64, Bytes, assert, Account, itxn, gtxn }} from '@algorandfoundation/algorand-typescript'
 
 export class {safe_name} extends Contract {{
 
   // Service configuration
   owner = GlobalState<Account>({{ key: 'o' }})
-  pricePerCall = GlobalState<uint64>({{ key: 'p' }})  // in microUSDC or microALGO
+  pricePerCall = GlobalState<uint64>({{ key: 'p' }})  // in microALGO or microUSDC
   totalCalls = GlobalState<uint64>({{ key: 'tc' }})
   totalEarned = GlobalState<uint64>({{ key: 'te' }})
 
   public createApplication(): void {{
     this.owner.value = Txn.sender
-    this.pricePerCall.value = Uint64(10000)  // default 0.01 USDC (6 decimals)
+    this.pricePerCall.value = Uint64(5000)  // default 0.005 USDC (6 decimals)
     this.totalCalls.value = Uint64(0)
     this.totalEarned.value = Uint64(0)
   }}
 
-  // === FILL: @abimethod() to configure price ===
-  // === FILL: @abimethod() to record a verified payment (called by facilitator/owner) ===
-  // === FILL: @abimethod() to get service stats (read-only getter) ===
-  // === FILL: @abimethod() for owner to withdraw earnings via itxn.payment ===
+  /**
+   * record_payment — TRUSTLESS payment verification.
+   * 
+   * This method verifies that a REAL payment transaction exists in the same
+   * atomic transaction group (via gtxn). The facilitator groups:
+   *   [0] = Payment/AssetTransfer (client → this app / owner)
+   *   [1] = This app call (record_payment)
+   *
+   * The contract checks:
+   *   - A payment tx exists in the group (gtxn index 0)
+   *   - The payment receiver is this contract's address or the owner
+   *   - The amount meets the minimum price
+   *
+   * This means nobody can fake a payment — the AVM enforces atomicity.
+   */
+  @abimethod()
+  public record_payment(): void {{
+    // Verify a payment transaction exists in this atomic group
+    // The payment must be at index 0 in the group
+    const payment = gtxn.PaymentTxn(Uint64(0))
+    
+    // Verify payment goes to the contract account (or owner)
+    assert(
+      payment.receiver === Global.currentApplicationAddress,
+      'Payment must be sent to the contract'
+    )
+    
+    // Verify payment amount meets the price
+    const amount: uint64 = payment.amount
+    assert(amount >= this.pricePerCall.value, 'Payment below minimum price')
+    
+    // Payment verified on-chain — update accounting
+    this.totalCalls.value = this.totalCalls.value + Uint64(1)
+    this.totalEarned.value = this.totalEarned.value + amount
+  }}
+
+  @abimethod()
+  public set_price(newPrice: uint64): void {{
+    assert(Txn.sender === this.owner.value, 'Only owner')
+    this.pricePerCall.value = newPrice
+  }}
+
+  @abimethod()
+  public get_stats(): uint64 {{
+    return this.totalCalls.value
+  }}
+
+  @abimethod()
+  public withdraw(): void {{
+    assert(Txn.sender === this.owner.value, 'Only owner can withdraw')
+    const balance: uint64 = this.totalEarned.value
+    assert(balance > Uint64(0), 'Nothing to withdraw')
+    
+    // Send accumulated funds to owner
+    itxn.payment({{
+      receiver: this.owner.value,
+      amount: balance,
+      fee: Uint64(0),
+    }}).submit()
+    
+    this.totalEarned.value = Uint64(0)
+  }}
 }}
 ```
 
-IMPORTANT x402 CONTEXT:
-- This contract is the ON-CHAIN component of an x402 pay-per-call service
-- The x402 protocol middleware (Express/Hono server) handles the 402 response flow OFF-CHAIN
-- The contract records payments that the facilitator has already settled on-chain
-- Keep the contract SIMPLE — 3-5 methods max. The complexity is in the middleware, not the contract.
-- Do NOT import x402 packages in the contract — those are for the off-chain server/client code
+CRITICAL x402 SECURITY PATTERN:
+- record_payment() MUST use `gtxn.PaymentTxn(Uint64(0))` to verify a REAL payment exists in the atomic group
+- Check `payment.receiver` is the contract address (`Global.currentApplicationAddress`) or the owner
+- Check `payment.amount >= this.pricePerCall.value`
+- This is TRUSTLESS — the AVM enforces that both transactions succeed or both fail
+- Do NOT accept caller/amount as function arguments — read them from the actual transaction group
+- The facilitator constructs the atomic group: [PaymentTxn, AppCallTxn(record_payment)]
+
+DO NOT use a pattern where record_payment takes (caller, amount) args — that's insecure.
+Instead, read the payment details directly from gtxn. This is what makes it verifiable.
 
 Fill in the === FILL === sections. Do not deviate from the import line or class structure."""
 

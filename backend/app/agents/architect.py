@@ -51,14 +51,17 @@ Use ONE of these exact categories: token_vault, crowdfunding, voting, nft, escro
 ## x402 CATEGORY RULES:
 If the user mentions x402, pay-per-call, pay-per-request, micropayment API, paid API, payment-gated, agent payment, or agentic commerce, use "x402_service" as the template_type.
 x402 apps have TWO parts:
-1. An on-chain Algorand contract that acts as a payment escrow/registry (tracks payments, manages access credits)
+1. An on-chain Algorand contract that VERIFIES payments trustlessly via atomic transaction groups (gtxn)
 2. An off-chain server + client pattern using x402 protocol middleware
 
 For x402_service specs:
-- The contract should handle payment tracking/escrow on-chain
-- Include methods like: create (init service config), record_payment (log payment), get_access_count (read credits), withdraw (owner withdraws earnings)
+- The contract MUST verify real payment transactions using gtxn (atomic group) — NOT accept trusted input
+- record_payment() should take ZERO arguments — it reads the payment from gtxn.PaymentTxn(0) in the same group
+- The contract verifies: payment.receiver == contract address, payment.amount >= price
+- Include methods like: create (init price), record_payment (verify + count), get_stats (read), withdraw (owner gets funds)
 - The ui_requirements should describe an x402 client demo UI that shows the pay-and-access flow
 - Add "x402_integration": true to the spec so downstream agents know to generate x402 middleware code
+- CRITICAL: record_payment MUST NOT accept (caller, amount) as arguments — that's insecure. It reads from gtxn.
 
 ## EXAMPLE GOOD SPEC (for "Build a pay-per-call weather API using x402"):
 {
@@ -83,7 +86,7 @@ For x402_service specs:
     "box_storage": [],
     "methods": [
       {"name": "create", "args": [{"name": "price_per_call", "type": "uint64"}], "returns": "void", "description": "Initialize service with price config", "on_complete": "NoOp"},
-      {"name": "record_payment", "args": [{"name": "caller", "type": "Address"}, {"name": "amount", "type": "uint64"}], "returns": "void", "description": "Record a verified payment from facilitator", "on_complete": "NoOp"},
+      {"name": "record_payment", "args": [], "returns": "void", "description": "Verify and record payment from atomic group transaction (trustless — reads payment from gtxn)", "on_complete": "NoOp"},
       {"name": "get_stats", "args": [], "returns": "uint64", "description": "Get total calls served", "on_complete": "NoOp"},
       {"name": "withdraw", "args": [], "returns": "void", "description": "Owner withdraws accumulated earnings", "on_complete": "NoOp"}
     ],

@@ -365,11 +365,13 @@ def build_file_structure(app_code: str, package_id: str, arc32_spec: any = None,
     sdk_code = generate_contract_sdk(arc32_spec or {}, package_id)
     files["/hooks/useContract.ts"] = sdk_code
 
-    # For x402_service templates, include the x402 client helper hook
+    # For x402_service templates, include the x402 client helper hook + server + config
     if template_type == "x402_service" or (spec and spec.get("x402_integration")):
         x402_config = spec.get("x402_config", {}) if spec else {}
         files["/hooks/useX402Client.ts"] = generate_x402_client_hook(x402_config, package_id)
         files["/x402-config.ts"] = generate_x402_config(x402_config)
+        files["/server/x402-server.ts"] = generate_x402_server(x402_config, spec or {}, arc32_spec)
+        files["/server/README.md"] = generate_x402_server_readme(x402_config, spec or {})
         
     return ReactGenerationResult(files=files)
 
@@ -840,6 +842,263 @@ export const X402_CONFIG = {{
   /** Payment scheme */
   scheme: 'exact',
 }};
+"""
+
+
+def generate_x402_server(x402_config: dict, spec: dict, arc32_spec: dict = None) -> str:
+    """Generate the x402 resource server (Express + x402 middleware)."""
+    price = x402_config.get("price_per_call", "$0.01")
+    asset = x402_config.get("payment_asset", "ALGO")
+    network = x402_config.get("network", "testnet")
+    facilitator = x402_config.get("facilitator_url", "https://facilitator.goplausible.xyz")
+    name = spec.get("name", "X402Service")
+    description = spec.get("description", "A pay-per-call API powered by x402 on Algorand")
+
+    # Determine what the API endpoint should return based on the spec description
+    desc_lower = description.lower()
+    if "joke" in desc_lower:
+        endpoint_path = "/api/joke"
+        endpoint_response = """    const jokes = [
+      "Why do programmers prefer dark mode? Because light attracts bugs.",
+      "There are only 10 types of people: those who understand binary and those who don't.",
+      "A SQL query walks into a bar, goes to two tables and asks: Can I join you?",
+      "Why did the developer go broke? Because he used up all his cache.",
+      "!false — it's funny because it's true.",
+    ];
+    const joke = jokes[Math.floor(Math.random() * jokes.length)];
+    res.json({ joke, timestamp: new Date().toISOString() });"""
+    elif "weather" in desc_lower:
+        endpoint_path = "/api/weather"
+        endpoint_response = """    const conditions = ["sunny", "cloudy", "partly cloudy", "rainy", "windy"];
+    res.json({
+      temperature: Math.floor(Math.random() * 30) + 10,
+      condition: conditions[Math.floor(Math.random() * conditions.length)],
+      humidity: Math.floor(Math.random() * 60) + 30,
+      city: req.query.city || "Mumbai",
+      timestamp: new Date().toISOString(),
+    });"""
+    else:
+        endpoint_path = "/api/data"
+        endpoint_response = """    res.json({
+      message: "Premium content delivered",
+      data: { value: Math.floor(Math.random() * 1000) },
+      timestamp: new Date().toISOString(),
+    });"""
+
+    # USDC asset extra config
+    asset_extra = ""
+    if asset.upper() == "USDC":
+        asset_extra = """
+      extra: {
+        asset: USDC_TESTNET_ASA_ID,  // USDC ASA on testnet
+      },"""
+
+    usdc_import = ', USDC_TESTNET_ASA_ID' if asset.upper() == "USDC" else ""
+
+    return f"""/**
+ * x402 Resource Server — {name}
+ * 
+ * {description}
+ * 
+ * This is the COMPLETE server-side component of the x402 flow.
+ * It uses @x402-avm/express middleware to:
+ *   1. Return 402 Payment Required when a client hits a paid endpoint
+ *   2. Verify payment proof via the facilitator
+ *   3. Serve content after payment is confirmed
+ * 
+ * Setup:
+ *   npm install express @x402-avm/express @x402-avm/avm @x402-avm/core dotenv
+ *   
+ * Run:
+ *   RESOURCE_PAY_TO=YOUR_ALGORAND_ADDRESS npx ts-node x402-server.ts
+ * 
+ * The facilitator ({facilitator}) handles on-chain verification.
+ * You do NOT need to run your own facilitator.
+ */
+
+import express from "express";
+import dotenv from "dotenv";
+import {{ paymentMiddlewareFromConfig }} from "@x402-avm/express";
+import {{ registerExactAvmScheme }} from "@x402-avm/avm/exact/server";
+import {{ x402ResourceServer }} from "@x402-avm/core/server";
+import {{ HTTPFacilitatorClient }} from "@x402-avm/core/server";
+import {{ ALGORAND_TESTNET_CAIP2{usdc_import} }} from "@x402-avm/avm";
+
+dotenv.config();
+
+const app = express();
+app.use(express.json());
+
+// ─── Configuration ────────────────────────────────────────────────────────────
+const PAY_TO = process.env.RESOURCE_PAY_TO!;  // Your Algorand address that receives payments
+const FACILITATOR_URL = process.env.FACILITATOR_URL || "{facilitator}";
+const PORT = parseInt(process.env.PORT || "4021");
+
+if (!PAY_TO) {{
+  console.error("ERROR: Set RESOURCE_PAY_TO to your Algorand address");
+  console.error("  RESOURCE_PAY_TO=YOUR_58_CHAR_ADDRESS npx ts-node x402-server.ts");
+  process.exit(1);
+}}
+
+// ─── x402 Setup ───────────────────────────────────────────────────────────────
+const facilitatorClient = new HTTPFacilitatorClient({{ url: FACILITATOR_URL }});
+const server = new x402ResourceServer(facilitatorClient);
+registerExactAvmScheme(server);
+
+// ─── Payment-Protected Routes ─────────────────────────────────────────────────
+const routes = {{
+  "GET {endpoint_path}": {{
+    accepts: {{
+      scheme: "exact",
+      network: ALGORAND_TESTNET_CAIP2,
+      payTo: PAY_TO,
+      price: "{price}",{asset_extra}
+    }},
+    description: "{description}",
+  }},
+}};
+
+// Apply x402 payment middleware — this handles the full 402 flow automatically
+app.use(paymentMiddlewareFromConfig(routes, facilitatorClient, [{{ network: "algorand:*", server }}]));
+
+// ─── API Endpoints ────────────────────────────────────────────────────────────
+
+// Paid endpoint — only reachable after x402 payment is verified
+app.get("{endpoint_path}", (req, res) => {{
+{endpoint_response}
+}});
+
+// Free health check (not in routes config = not payment-gated)
+app.get("/health", (req, res) => {{
+  res.json({{ status: "healthy", service: "{name}", price: "{price}" }});
+}});
+
+// Free root — shows service info
+app.get("/", (req, res) => {{
+  res.json({{
+    name: "{name}",
+    description: "{description}",
+    price: "{price}",
+    protocol: "x402",
+    network: "Algorand Testnet",
+    payTo: PAY_TO,
+    facilitator: FACILITATOR_URL,
+    endpoints: {{
+      paid: "GET {endpoint_path} ({price})",
+      free: "GET /health",
+    }},
+  }});
+}});
+
+// ─── Start Server ─────────────────────────────────────────────────────────────
+app.listen(PORT, () => {{
+  console.log("");
+  console.log("  x402 Resource Server running!");
+  console.log("  ─────────────────────────────");
+  console.log(`  URL:         http://localhost:${{PORT}}`);
+  console.log(`  Paid API:    GET {endpoint_path} ({price})`);
+  console.log(`  Pay-to:      ${{PAY_TO}}`);
+  console.log(`  Facilitator: ${{FACILITATOR_URL}}`);
+  console.log(`  Network:     Algorand Testnet`);
+  console.log("");
+  console.log("  Try it:");
+  console.log(`    curl http://localhost:${{PORT}}{endpoint_path}`);
+  console.log("    → 402 Payment Required (with payment instructions)");
+  console.log("");
+  console.log("  Use the x402 client to pay automatically:");
+  console.log("    import {{ wrapFetchWithPayment }} from '@x402-avm/fetch';");
+  console.log("");
+}});
+
+export default app;
+"""
+
+
+def generate_x402_server_readme(x402_config: dict, spec: dict) -> str:
+    """Generate a README for the x402 server setup."""
+    price = x402_config.get("price_per_call", "$0.01")
+    name = spec.get("name", "X402Service")
+    description = spec.get("description", "x402 pay-per-call API")
+    facilitator = x402_config.get("facilitator_url", "https://facilitator.goplausible.xyz")
+
+    return f"""# {name} — x402 Server
+
+{description}
+
+## Quick Start
+
+```bash
+# 1. Install dependencies
+npm install express @x402-avm/express @x402-avm/avm @x402-avm/core dotenv
+npm install -D typescript ts-node @types/express @types/node
+
+# 2. Set your Algorand address (the one that receives payments)
+export RESOURCE_PAY_TO=YOUR_ALGORAND_58_CHAR_ADDRESS
+
+# 3. Run the server
+npx ts-node x402-server.ts
+```
+
+## How It Works
+
+1. Client requests the paid endpoint
+2. Server returns **HTTP 402** with payment instructions (price, network, payTo address)
+3. Client's x402 library (`@x402-avm/fetch`) automatically signs a payment transaction
+4. Facilitator (`{facilitator}`) verifies and settles the payment on-chain
+5. Client retries with payment proof → server serves content
+
+**You don't need to handle payments manually.** The `@x402-avm/express` middleware does everything.
+
+## Architecture
+
+```
+Client (wallet)          Your Server              Facilitator (public)
+     │                       │                          │
+     │── GET /api/joke ─────▶│                          │
+     │◀── 402 + pay {price} ─│                          │
+     │                       │                          │
+     │── sign payment ───────────────────────────────▶ │
+     │                       │                    verifies on-chain
+     │── GET /joke + proof ─▶│                          │
+     │                       │── verify payment ──────▶ │
+     │                       │◀── confirmed ───────────│
+     │◀── joke response ────│                          │
+```
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `RESOURCE_PAY_TO` | Yes | Your Algorand address that receives payments |
+| `FACILITATOR_URL` | No | Default: `{facilitator}` |
+| `PORT` | No | Default: `4021` |
+
+## Testing with the x402 Client
+
+```typescript
+import {{ wrapFetchWithPayment, x402Client }} from "@x402-avm/fetch";
+import {{ registerExactAvmScheme }} from "@x402-avm/avm/exact/client";
+
+const client = new x402Client();
+registerExactAvmScheme(client, {{ signer: yourWalletSigner }});
+
+const fetchWithPay = wrapFetchWithPayment(fetch, client);
+
+// This automatically handles the 402 → pay → retry flow
+const response = await fetchWithPay("http://localhost:4021/api/joke");
+const data = await response.json();
+console.log(data.joke);
+```
+
+## On-Chain Contract
+
+The smart contract (deployed separately via AlgoVibe) tracks payments on-chain:
+- `record_payment()` — logs verified payments
+- `get_service_stats()` — total calls served
+- `withdraw()` — owner withdraws accumulated earnings
+
+The contract provides an immutable audit trail. The x402 middleware + facilitator
+handle the actual payment flow — the contract is your accounting layer.
 """
 
 
