@@ -202,6 +202,11 @@ async def generate_react_frontend(
     """Generate Algorand React frontend."""
     logger.info("[REACT_AGENT] Starting Algorand frontend generation")
 
+    # For x402_service templates, append x402 client UI instructions
+    system_prompt = REACT_AGENT_SYSTEM_PROMPT
+    if template_type == "x402_service" or spec.get("x402_integration"):
+        system_prompt += X402_REACT_SUPPLEMENT
+
     user_prompt = REACT_AGENT_USER_PROMPT.format(
         name=spec.get("name", "MyDApp"),
         description=spec.get("description", ""),
@@ -212,7 +217,7 @@ async def generate_react_frontend(
     )
 
     response = await generate_completion(
-        system_prompt=REACT_AGENT_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=0.0,
         max_tokens=8000,
@@ -223,10 +228,7 @@ async def generate_react_frontend(
 
     app_code = extract_react_code(response)
     
-    # In a real implementation, we would also generate the useAlgorand hook.
-    # For now, we'll return a basic structure.
-    
-    return build_file_structure(app_code, package_id, arc32_spec)
+    return build_file_structure(app_code, package_id, arc32_spec, template_type=template_type, spec=spec)
 
 def extract_react_code(response: str) -> str:
     code_block = re.search(r'```(?:tsx?|jsx?|javascript|typescript)?\s*\n?([\s\S]*?)```', response)
@@ -348,7 +350,7 @@ def generate_contract_sdk(arc32_spec: dict, package_id: str = "0") -> str:
     ])
     return "\n".join(lines)
 
-def build_file_structure(app_code: str, package_id: str, arc32_spec: any = None) -> ReactGenerationResult:
+def build_file_structure(app_code: str, package_id: str, arc32_spec: any = None, template_type: str = "", spec: dict = None) -> ReactGenerationResult:
     files = {
         "/App.tsx": app_code,
         "/index.css": DEFAULT_CSS,
@@ -362,8 +364,54 @@ def build_file_structure(app_code: str, package_id: str, arc32_spec: any = None)
     # Always generate the SDK file to prevent import crashes
     sdk_code = generate_contract_sdk(arc32_spec or {}, package_id)
     files["/hooks/useContract.ts"] = sdk_code
+
+    # For x402_service templates, include the x402 client helper hook
+    if template_type == "x402_service" or (spec and spec.get("x402_integration")):
+        x402_config = spec.get("x402_config", {}) if spec else {}
+        files["/hooks/useX402Client.ts"] = generate_x402_client_hook(x402_config, package_id)
+        files["/x402-config.ts"] = generate_x402_config(x402_config)
         
     return ReactGenerationResult(files=files)
+
+X402_REACT_SUPPLEMENT = """
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+x402 SERVICE UI — ADDITIONAL RULES:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This is an x402 pay-per-call service dApp. The UI must demonstrate the x402 payment flow:
+
+1. ADDITIONAL IMPORT: Also import `useX402Client` from `./hooks/useX402Client`:
+   ```
+   import { useX402Client } from './hooks/useX402Client';
+   ```
+
+2. HERO SECTION: Show that this is an x402-powered pay-per-call API service. Include a badge or tag showing "x402 Protocol" and the price per call.
+
+3. x402 DEMO SECTION: Add a prominent "Pay & Access" card that demonstrates the x402 flow:
+   - Show a "Call API" button that uses `useX402Client().payAndFetch(url)` 
+   - Display payment status (idle → paying → success/error)
+   - Show the API response data after successful payment
+   - Display payment receipt/txId after settlement
+
+4. SERVICE STATS: Show on-chain stats from the contract (total calls, total earned, price per call) using the normal useContract + readState pattern.
+
+5. OWNER PANEL: If activeAddress matches owner, show a "Withdraw Earnings" button.
+
+6. x402 FLOW EXPLANATION: Add a small info section explaining:
+   "This API uses the x402 protocol: your wallet automatically pays [price] per request. Payment is settled on Algorand in seconds."
+
+7. COLOR ACCENT for x402: Use a purple/violet accent (#8b5cf6) for x402-specific elements alongside the standard amber (#f59e0b) for contract interactions.
+
+8. The useX402Client hook provides: { payAndFetch, paying, lastReceipt, lastResponse, error }
+
+STRUCTURE for x402 UI:
+- Top: Service name + x402 badge + price display
+- Stats row: Total Calls | Total Earned | Price Per Call (from contract state)
+- Main card: "Try the API" — input for the API endpoint, "Pay & Call" button, response display
+- Below: Payment receipt card (shows txId, amount, timestamp after payment)
+- Bottom: Owner section (withdraw button, only if connected wallet = owner)
+"""
 
 DEFAULT_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
@@ -617,6 +665,184 @@ export const useContractState = (app_id: number | string) => {
 };
 """
 
+def generate_x402_client_hook(x402_config: dict, app_id: str) -> str:
+    """Generate the useX402Client React hook for x402 pay-per-call demo."""
+    price = x402_config.get("price_per_call", "$0.01")
+    return f"""// x402 Client Hook — demonstrates the x402 pay-per-call flow
+// In production, this would use @x402-avm/fetch with a real wallet signer.
+// In Sandpack preview, it simulates the flow via the bridge protocol.
+import {{ useState, useCallback }} from 'react';
+import {{ useAlgorand }} from './useAlgorand';
+import {{ APP_ID }} from './useContract';
+import {{ X402_CONFIG }} from '../x402-config';
+
+interface PaymentReceipt {{
+  txId: string;
+  amount: string;
+  timestamp: number;
+  network: string;
+}}
+
+interface X402Response {{
+  data: any;
+  paid: boolean;
+  receipt?: PaymentReceipt;
+}}
+
+export const useX402Client = () => {{
+  const {{ activeAddress, callMethod }} = useAlgorand();
+  const [paying, setPaying] = useState(false);
+  const [lastReceipt, setLastReceipt] = useState<PaymentReceipt | null>(null);
+  const [lastResponse, setLastResponse] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Simulates the x402 pay-and-fetch flow:
+   * 1. Client requests the paid endpoint
+   * 2. Server responds with 402 + payment requirements
+   * 3. Client wallet signs payment transaction
+   * 4. Facilitator verifies and settles on-chain
+   * 5. Client retries with PAYMENT-SIGNATURE header
+   * 6. Server returns the paid content
+   *
+   * In this preview, we simulate via the contract's record_payment method
+   * and return mock API data to demonstrate the UX flow.
+   */
+  const payAndFetch = useCallback(async (url: string, options?: RequestInit): Promise<X402Response> => {{
+    if (!activeAddress) {{
+      setError('Connect your wallet to make paid API calls');
+      throw new Error('Wallet not connected');
+    }}
+
+    setPaying(true);
+    setError(null);
+    setLastResponse(null);
+
+    try {{
+      // Step 1: Simulate x402 payment via contract method call
+      // In production, this is handled by @x402-avm/fetch automatically
+      const priceInMicroUnits = X402_CONFIG.pricePerCallMicro;
+      
+      await callMethod({{
+        method: 'record_payment',
+        args: [activeAddress, priceInMicroUnits],
+        app_id: APP_ID,
+      }});
+
+      // Step 2: Payment settled — generate receipt
+      const receipt: PaymentReceipt = {{
+        txId: 'tx_' + Math.random().toString(36).slice(2, 10).toUpperCase(),
+        amount: X402_CONFIG.priceDisplay,
+        timestamp: Date.now(),
+        network: X402_CONFIG.network,
+      }};
+      setLastReceipt(receipt);
+
+      // Step 3: Simulate API response (in production, this is the real response after payment)
+      const mockResponse = {{
+        success: true,
+        data: generateMockApiResponse(url),
+        meta: {{
+          paid: true,
+          price: X402_CONFIG.priceDisplay,
+          protocol: 'x402',
+          settledOn: 'Algorand Testnet',
+          appId: APP_ID,
+        }},
+      }};
+      setLastResponse(mockResponse);
+
+      return {{ data: mockResponse, paid: true, receipt }};
+    }} catch (err) {{
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      throw err;
+    }} finally {{
+      setPaying(false);
+    }}
+  }}, [activeAddress, callMethod]);
+
+  return {{
+    payAndFetch,
+    paying,
+    lastReceipt,
+    lastResponse,
+    error,
+    config: X402_CONFIG,
+  }};
+}};
+
+function generateMockApiResponse(url: string): any {{
+  // Generate contextual mock data based on the URL
+  if (url.includes('weather')) {{
+    return {{
+      temperature: Math.floor(Math.random() * 30) + 15,
+      condition: ['sunny', 'cloudy', 'partly cloudy', 'rainy'][Math.floor(Math.random() * 4)],
+      humidity: Math.floor(Math.random() * 60) + 30,
+      wind: Math.floor(Math.random() * 20) + 5,
+      city: url.split('/').pop() || 'Unknown',
+    }};
+  }}
+  if (url.includes('joke') || url.includes('humor')) {{
+    const jokes = [
+      'Why do programmers prefer dark mode? Because light attracts bugs.',
+      'There are only 10 types of people in the world: those who understand binary and those who don\\'t.',
+      'A SQL query walks into a bar, goes to two tables and asks: Can I join you?',
+    ];
+    return {{ joke: jokes[Math.floor(Math.random() * jokes.length)] }};
+  }}
+  return {{
+    message: 'API call successful',
+    endpoint: url,
+    timestamp: new Date().toISOString(),
+    data: {{ value: Math.floor(Math.random() * 1000), unit: 'credits' }},
+  }};
+}}
+"""
+
+
+def generate_x402_config(x402_config: dict) -> str:
+    """Generate the x402 configuration file."""
+    price = x402_config.get("price_per_call", "$0.01")
+    asset = x402_config.get("payment_asset", "ALGO")
+    network = x402_config.get("network", "testnet")
+    facilitator = x402_config.get("facilitator_url", "https://facilitator.goplausible.xyz")
+    
+    # Parse price string to micro units
+    try:
+        price_float = float(price.replace("$", ""))
+        if asset.upper() == "USDC":
+            micro_units = int(price_float * 1_000_000)  # USDC has 6 decimals
+        else:
+            micro_units = int(price_float * 1_000_000)  # microALGO
+    except (ValueError, AttributeError):
+        micro_units = 10000  # Default 0.01
+
+    return f"""// x402 Service Configuration
+// This configures the x402 payment protocol parameters for this dApp.
+// In production, these values are read from the server's 402 response headers.
+
+export const X402_CONFIG = {{
+  /** Human-readable price per API call */
+  priceDisplay: '{price}',
+  /** Price in micro-units (microALGO or microUSDC) */
+  pricePerCallMicro: {micro_units},
+  /** Payment asset */
+  asset: '{asset}',
+  /** Algorand network */
+  network: '{network}',
+  /** CAIP-2 network identifier */
+  networkCaip2: 'algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=',
+  /** Facilitator URL for payment verification and settlement */
+  facilitatorUrl: '{facilitator}',
+  /** x402 protocol version */
+  protocolVersion: 2,
+  /** Payment scheme */
+  scheme: 'exact',
+}};
+"""
+
+
 FIX_FRONTEND_SYSTEM_PROMPT = """You fix React/TypeScript files for an Algorand DApp Sandpack preview.
 
 Output ONLY valid JSON (no markdown fences):
@@ -627,7 +853,8 @@ Rules:
 - Do NOT modify contract source (.py, .algo.ts) or contract.arc32.json unless the user explicitly asks.
 - Preserve APP_ID in useContract.ts and existing hook method names unless fixing a bug requires changes.
 - Fix compile/runtime errors (duplicate param names, bad imports, TypeScript errors).
-- Apply the user's requested UI or logic changes in App.tsx and related components."""
+- Apply the user's requested UI or logic changes in App.tsx and related components.
+- If the dApp is an x402_service, the hooks/useX402Client.ts and x402-config.ts files exist and provide the x402 payment flow."""
 
 FRONTEND_FIX_EXTENSIONS = (".tsx", ".ts", ".css", ".jsx", ".js")
 CONTRACT_SOURCE_SUFFIXES = (".py", ".algo.ts")

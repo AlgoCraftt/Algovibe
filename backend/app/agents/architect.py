@@ -46,7 +46,51 @@ Your job is to analyze user requests and create a SIMPLE, FOCUSED specification 
 - Use ARC4-compliant ABI methods where possible (@abimethod / @arc4.abimethod)
 
 ## IMPORTANT RULES for category naming:
-Use ONE of these exact categories: token_vault, crowdfunding, voting, nft, escrow, marketplace, subscription, lottery, counter, transfer, game, token, defi, dao, custom
+Use ONE of these exact categories: token_vault, crowdfunding, voting, nft, escrow, marketplace, subscription, lottery, counter, transfer, game, token, defi, dao, x402_service, custom
+
+## x402 CATEGORY RULES:
+If the user mentions x402, pay-per-call, pay-per-request, micropayment API, paid API, payment-gated, agent payment, or agentic commerce, use "x402_service" as the template_type.
+x402 apps have TWO parts:
+1. An on-chain Algorand contract that acts as a payment escrow/registry (tracks payments, manages access credits)
+2. An off-chain server + client pattern using x402 protocol middleware
+
+For x402_service specs:
+- The contract should handle payment tracking/escrow on-chain
+- Include methods like: create (init service config), record_payment (log payment), get_access_count (read credits), withdraw (owner withdraws earnings)
+- The ui_requirements should describe an x402 client demo UI that shows the pay-and-access flow
+- Add "x402_integration": true to the spec so downstream agents know to generate x402 middleware code
+
+## EXAMPLE GOOD SPEC (for "Build a pay-per-call weather API using x402"):
+{
+  "template_type": "x402_service",
+  "spec": {
+    "name": "WeatherPayPerCall",
+    "description": "A pay-per-call weather API that charges USDC per request using x402 protocol on Algorand",
+    "x402_integration": true,
+    "x402_config": {
+      "price_per_call": "$0.01",
+      "payment_asset": "USDC",
+      "network": "testnet",
+      "facilitator_url": "https://facilitator.goplausible.xyz"
+    },
+    "global_state": [
+      {"name": "owner", "type": "Address", "description": "Service owner who receives payments"},
+      {"name": "total_calls", "type": "uint64", "description": "Total API calls served"},
+      {"name": "total_earned", "type": "uint64", "description": "Total microUSDC earned"},
+      {"name": "price_per_call", "type": "uint64", "description": "Price per call in microUSDC"}
+    ],
+    "local_state": [],
+    "box_storage": [],
+    "methods": [
+      {"name": "create", "args": [{"name": "price_per_call", "type": "uint64"}], "returns": "void", "description": "Initialize service with price config", "on_complete": "NoOp"},
+      {"name": "record_payment", "args": [{"name": "caller", "type": "Address"}, {"name": "amount", "type": "uint64"}], "returns": "void", "description": "Record a verified payment from facilitator", "on_complete": "NoOp"},
+      {"name": "get_stats", "args": [], "returns": "uint64", "description": "Get total calls served", "on_complete": "NoOp"},
+      {"name": "withdraw", "args": [], "returns": "void", "description": "Owner withdraws accumulated earnings", "on_complete": "NoOp"}
+    ],
+    "ui_requirements": ["Service dashboard showing total calls and earnings", "Demo pay-per-call button that simulates x402 flow", "Price display and payment status", "Owner withdraw earnings button"],
+    "business_logic": ["Only owner can withdraw", "Payment recording verifies caller identity", "Price is set at creation and tracked on-chain"]
+  }
+}
 
 ## EXAMPLE GOOD SPEC (for "Create a crowdfunding app"):
 {
@@ -102,7 +146,8 @@ ARCHITECT_USER_PROMPT = """User request: {prompt}
 Create a SIMPLE contract spec for Algorand using Puya. Remember:
 - Maximum 5 methods
 - Types: uint64, bytes, str, bool, Address
-- template_type MUST be one of: token_vault, crowdfunding, voting, nft, escrow, marketplace, subscription, lottery, counter, transfer, game, token, defi, dao, custom
+- template_type MUST be one of: token_vault, crowdfunding, voting, nft, escrow, marketplace, subscription, lottery, counter, transfer, game, token, defi, dao, x402_service, custom
+- If the user mentions x402, pay-per-call, paid API, micropayments, or agentic commerce → use "x402_service" and include "x402_integration": true in the spec
 
 Respond strictly with ONLY a JSON object:"""
 

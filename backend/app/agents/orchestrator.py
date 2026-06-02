@@ -183,8 +183,10 @@ async def generate_contract_node(state: PipelineState) -> PipelineState:
 
     agent = AlgorandAgent(framework=state["framework"])
     try:
+        # Include template_type in spec so the agent can load appropriate skills
+        spec_with_type = {**state["contract_spec"], "template_type": state.get("template_type", "")}
         result = await agent.generate_contract(
-            spec=state["contract_spec"],
+            spec=spec_with_type,
             docs_context=state["contract_docs"],
             previous_code=state.get("contract_code") if is_retry else None,
             error_context=state.get("error") if is_retry else None,

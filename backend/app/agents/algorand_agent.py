@@ -437,9 +437,10 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
 
     # ── Fix 1: Load ALL reference files ─────────────────────────────────────
 
-    def _load_skills(self) -> str:
+    def _load_skills(self, template_type: str = "") -> str:
         """
         Load ALL skill reference files for the active framework.
+        If template_type is x402_service, also load x402 TypeScript skills.
         """
         framework_path = SKILLS_BASE / self.config["skill_path"]
         skill_contents = []
@@ -462,6 +463,32 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
         trouble_main = SKILLS_BASE / "troubleshoot-errors" / "SKILL.md"
         if trouble_main.exists():
             skill_contents.append(f"## COMMON ERRORS & FIXES\n{trouble_main.read_text(encoding='utf-8')}")
+
+        # 4. x402 skills — loaded selectively when template_type is x402_service
+        if template_type == "x402_service":
+            x402_path = SKILLS_BASE / "algorand-x402-typescript"
+            x402_main = x402_path / "SKILL.md"
+            if x402_main.exists():
+                skill_contents.append(f"## X402 PROTOCOL SKILL\n{x402_main.read_text(encoding='utf-8')}")
+            
+            # Load ONLY the concise guide files (not the full examples which are huge)
+            x402_refs = x402_path / "references"
+            if x402_refs.exists():
+                # Only load the guides, NOT the full examples (too large for most models)
+                priority_files = [
+                    "explain-algorand-x402-typescript.md",
+                    "create-typescript-x402-server.md",
+                    "create-typescript-x402-client.md",
+                ]
+                for fname in priority_files:
+                    fpath = x402_refs / fname
+                    if fpath.exists():
+                        # Truncate each file to first 3000 chars to stay within context limits
+                        content = fpath.read_text(encoding='utf-8')[:3000]
+                        section_title = f"X402 REFERENCE: {fpath.stem.upper().replace('-', ' ')}"
+                        skill_contents.append(f"## {section_title}\n{content}")
+
+            logger.info("[ALGORAND_AGENT] Loaded x402 skill files for x402_service template")
 
         loaded = [s.split('\n')[0] for s in skill_contents]
         logger.info(f"[ALGORAND_AGENT] Loaded {len(skill_contents)} skill sections: {loaded}")
@@ -490,14 +517,58 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
 
     # ── Fix 4: Golden skeleton template ─────────────────────────────────────
 
-    def _get_contract_skeleton(self, contract_name: str) -> str:
+    def _get_contract_skeleton(self, contract_name: str, template_type: str = "") -> str:
         """
         Return a structural skeleton the LLM must follow.
+        Uses x402-specific skeleton when template_type is x402_service.
         """
         if self.framework == "puyats":
             safe_name = "".join(
                 word.capitalize() for word in re.sub(r"[^a-zA-Z0-9 ]", "", contract_name).split()
             ) or "MyContract"
+
+            # x402 service-specific skeleton
+            if template_type == "x402_service":
+                return f"""## GOLDEN SKELETON FOR x402 SERVICE CONTRACT (follow this structure exactly)
+
+```typescript
+// This contract acts as an on-chain payment registry for an x402-gated API service.
+// The actual x402 protocol flow (402 response → client pays → facilitator settles) 
+// happens off-chain via middleware. This contract records payments and tracks access.
+
+import {{ Contract, GlobalState, abimethod, uint64, Txn, Global, Uint64, Bytes, assert, Account, itxn }} from '@algorandfoundation/algorand-typescript'
+
+export class {safe_name} extends Contract {{
+
+  // Service configuration
+  owner = GlobalState<Account>({{ key: 'o' }})
+  pricePerCall = GlobalState<uint64>({{ key: 'p' }})  // in microUSDC or microALGO
+  totalCalls = GlobalState<uint64>({{ key: 'tc' }})
+  totalEarned = GlobalState<uint64>({{ key: 'te' }})
+
+  public createApplication(): void {{
+    this.owner.value = Txn.sender
+    this.pricePerCall.value = Uint64(10000)  // default 0.01 USDC (6 decimals)
+    this.totalCalls.value = Uint64(0)
+    this.totalEarned.value = Uint64(0)
+  }}
+
+  // === FILL: @abimethod() to configure price ===
+  // === FILL: @abimethod() to record a verified payment (called by facilitator/owner) ===
+  // === FILL: @abimethod() to get service stats (read-only getter) ===
+  // === FILL: @abimethod() for owner to withdraw earnings via itxn.payment ===
+}}
+```
+
+IMPORTANT x402 CONTEXT:
+- This contract is the ON-CHAIN component of an x402 pay-per-call service
+- The x402 protocol middleware (Express/Hono server) handles the 402 response flow OFF-CHAIN
+- The contract records payments that the facilitator has already settled on-chain
+- Keep the contract SIMPLE — 3-5 methods max. The complexity is in the middleware, not the contract.
+- Do NOT import x402 packages in the contract — those are for the off-chain server/client code
+
+Fill in the === FILL === sections. Do not deviate from the import line or class structure."""
+
             return f"""## GOLDEN SKELETON (follow this structure exactly)
 
 ```typescript
@@ -575,7 +646,8 @@ class {safe_name}(ARC4Contract):
           5. Pre-compilation sanitizer (Solution A)
           6. Verified few-shot examples (Solution B)
         """
-        skills_context = self._load_skills()
+        template_type = spec.get("template_type", "")
+        skills_context = self._load_skills(template_type=template_type)
 
         full_system_prompt = (
             f"{self.config['system_prompt']}\n\n"
@@ -606,7 +678,7 @@ class {safe_name}(ARC4Contract):
                     "and fix all issues. Output the COMPLETE corrected contract."
                 )
         else:
-            skeleton = self._get_contract_skeleton(contract_name)
+            skeleton = self._get_contract_skeleton(contract_name, template_type=template_type)
             prompt_parts.append(skeleton)
 
         prompt_parts.append("Generate the complete smart contract code now. Output ONLY the code, no explanation.")
