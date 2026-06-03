@@ -119,6 +119,10 @@ export function BridgeHandler() {
         }
 
         default:
+          if (data.type === 'SIGN_X402_PAYMENT') {
+            handleSignX402Payment(event.source, data)
+            break
+          }
           sendResponse(event.source, data.id, null, `Unsupported request type: ${data.type}`)
       }
     }
@@ -189,6 +193,86 @@ export function BridgeHandler() {
     if (!txId) throw new Error('OptIn transaction submitted but no TX ID returned')
     await algosdk.waitForConfirmation(algodClient, txId, 10)
     return txId
+  }
+
+  /**
+   * Handle x402 payment signing.
+   * 
+   * The x402 protocol requires the client to sign a payment transaction
+   * and return it as a base64-encoded proof that gets sent as an X-PAYMENT header.
+   * 
+   * This uses the @x402/avm client scheme pattern:
+   * 1. Parse payment requirements from the 402 response
+   * 2. Build an Algorand payment/ASA transfer transaction
+   * 3. Sign it with the connected wallet
+   * 4. Return the signed bytes as base64 (the "payment proof")
+   */
+  const handleSignX402Payment = async (source: MessageEventSource, request: BridgeRequest) => {
+    const { paymentRequirements, resourceUrl } = request.payload || {}
+
+    if (!activeAddress || !transactionSigner) {
+      sendResponse(source, request.id, null, 'Wallet not connected — cannot sign x402 payment')
+      return
+    }
+
+    if (!paymentRequirements) {
+      sendResponse(source, request.id, null, 'Missing paymentRequirements in SIGN_X402_PAYMENT request')
+      return
+    }
+
+    try {
+      const params = await algodClient.getTransactionParams().do()
+
+      // x402 payment requirements contain: payTo, amount (atomic units), asset (optional ASA ID)
+      const payTo = paymentRequirements.payTo
+      const amount = Number(paymentRequirements.maxAmountRequired || paymentRequirements.amount || 0)
+      const asset = paymentRequirements.extra?.asset || paymentRequirements.asset
+
+      if (!payTo || amount <= 0) {
+        sendResponse(source, request.id, null, 'Invalid payment requirements: missing payTo or amount')
+        return
+      }
+
+      let txn: algosdk.Transaction
+
+      if (asset) {
+        // ASA transfer (USDC)
+        txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+          sender: activeAddress as string,
+          receiver: payTo,
+          amount: amount,
+          assetIndex: Number(asset),
+          suggestedParams: params,
+        })
+      } else {
+        // Native ALGO payment
+        txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+          sender: activeAddress as string,
+          receiver: payTo,
+          amount: amount,
+          suggestedParams: params,
+        })
+      }
+
+      // Sign the transaction
+      const signed = await transactionSigner([txn], [0])
+      const signedBytes = signed[0]
+
+      // Return the signed transaction as base64 — this becomes the X-PAYMENT header value
+      const base64Proof = Buffer.from(signedBytes).toString('base64')
+
+      sendResponse(source, request.id, {
+        signedPayment: base64Proof,
+        sender: activeAddress,
+        receiver: payTo,
+        amount: amount,
+        asset: asset || null,
+        txnBytes: base64Proof, // alias for compatibility
+      })
+    } catch (err: any) {
+      console.error('[BridgeHandler] x402 payment signing failed:', err)
+      sendResponse(source, request.id, null, `x402 payment signing failed: ${err.message}`)
+    }
   }
 
   const executeCallMethod = async () => {

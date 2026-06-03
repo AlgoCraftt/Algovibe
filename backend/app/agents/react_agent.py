@@ -771,12 +771,17 @@ export const useContractState = (app_id: number | string) => {
 """
 
 def generate_x402_client_hook(x402_config: dict, app_id: str) -> str:
-    """Generate the useX402Client React hook for x402 pay-per-call demo."""
+    """Generate the useX402Client React hook — real spec-compliant x402 flow."""
     price = x402_config.get("price_per_call", "$0.01")
-    return f"""// x402 Client Hook — demonstrates the x402 pay-per-call flow
-// In the preview, this uses the bridge's built-in payment grouping.
-// The bridge constructs [PaymentTxn, AppCallTxn] as an atomic group automatically
-// when you pass a `payment` field to callMethod.
+    return f"""// x402 Client Hook — REAL spec-compliant x402 HTTP 402 flow
+// When X402_SERVER_URL is configured, this does:
+//   1. fetch(endpoint) → gets HTTP 402 + PAYMENT-REQUIRED header
+//   2. Parses payment requirements (price, payTo, network, asset)
+//   3. Signs payment via bridge (SIGN_X402_PAYMENT message to parent)
+//   4. Retries with X-PAYMENT header containing signed proof
+//   5. Returns real server response
+//
+// When no server URL is configured, falls back to the contract-direct flow.
 import {{ useState, useCallback }} from 'react';
 import {{ useAlgorand }} from './useAlgorand';
 import {{ APP_ID }} from './useContract';
@@ -787,12 +792,45 @@ interface PaymentReceipt {{
   amount: string;
   timestamp: number;
   network: string;
+  protocol: 'x402';
 }}
 
 interface X402Response {{
   data: any;
   paid: boolean;
   receipt?: PaymentReceipt;
+  mode: 'x402-http' | 'contract-direct' | 'mock';
+}}
+
+/**
+ * Sign an x402 payment via the bridge (parent window signs with connected wallet).
+ * Returns the signed payment as base64 for the X-PAYMENT header.
+ */
+function signX402Payment(paymentRequirements: any, resourceUrl: string): Promise<any> {{
+  return new Promise((resolve, reject) => {{
+    const id = 'x402_' + Math.random().toString(36).slice(2);
+    const timeout = setTimeout(() => {{
+      window.removeEventListener('message', handler);
+      reject(new Error('x402 payment signing timed out — is your wallet connected?'));
+    }}, 60000);
+    const handler = (e: MessageEvent) => {{
+      if (e.data?.id === id && e.data?.type === 'ALGOCRAFT_RESPONSE') {{
+        clearTimeout(timeout);
+        window.removeEventListener('message', handler);
+        if (e.data.error) {{
+          reject(new Error(e.data.error));
+        }} else {{
+          resolve(e.data.result);
+        }}
+      }}
+    }};
+    window.addEventListener('message', handler);
+    window.parent.postMessage({{
+      id,
+      type: 'SIGN_X402_PAYMENT',
+      payload: {{ paymentRequirements, resourceUrl }},
+    }}, '*');
+  }});
 }}
 
 export const useX402Client = () => {{
@@ -803,18 +841,14 @@ export const useX402Client = () => {{
   const [error, setError] = useState<string | null>(null);
 
   /**
-   * Pay-and-call flow for x402:
-   * 
-   * The bridge handles the atomic group construction:
-   *   [0] PaymentTxn (user → contract address, amount = price)
-   *   [1] AppCallTxn (record_payment with 0 args)
-   * 
-   * SINGLE SOURCE OF TRUTH: the payment amount is read directly from the
-   * deployed contract's on-chain price (global state). This guarantees the
-   * payment ALWAYS matches what the contract expects — no config drift.
+   * Real x402 flow:
+   * 1. Fetch the endpoint → expect HTTP 402 with PAYMENT-REQUIRED header
+   * 2. Parse payment requirements from the 402 response
+   * 3. Sign the payment via bridge (wallet in parent window)
+   * 4. Retry the request with X-PAYMENT header
+   * 5. Return the real API response
    *
-   * In production (outside Sandpack), this would be handled by @x402-avm/fetch
-   * which intercepts 402 responses and auto-pays.
+   * Falls back to contract-direct payment if no x402 server is configured.
    */
   const payAndFetch = useCallback(async (url: string, options?: RequestInit): Promise<X402Response> => {{
     if (!activeAddress) {{
@@ -826,62 +860,137 @@ export const useX402Client = () => {{
     setError(null);
     setLastResponse(null);
 
-    try {{
-      // 1. Read the ACTUAL price from the contract's on-chain state.
-      //    Keys: 'price_per_call' / 'pricePerCall' / 'p' (schema alias or raw key).
-      //    Fall back to the config value only if state read fails.
-      let priceMicro = X402_CONFIG.pricePerCallMicro;
-      try {{
-        const state: any = await readState(APP_ID);
-        const onChainPrice =
-          state?.price_per_call ?? state?.pricePerCall ?? state?.p;
-        if (onChainPrice !== undefined && onChainPrice !== null) {{
-          const parsed = Number(onChainPrice);
-          if (!isNaN(parsed) && parsed > 0) priceMicro = parsed;
-        }}
-      }} catch (e) {{
-        // If state read fails, use the config default
-        console.warn('Could not read on-chain price, using config default', e);
-      }}
+    // Check if the user configured an x402 server endpoint in settings
+    // (In preview, URL gets overridden by the parent via file patching above setPaying)
 
-      // 2. Pay EXACTLY the contract's price. The bridge builds:
-      //      [PaymentTxn(user → contract, priceMicro), AppCallTxn(record_payment)]
-      //    The contract verifies payment.amount >= pricePerCall via gtxn.
-      const result: any = await callMethod({{
-        method: 'record_payment',
-        args: [],  // ZERO args — contract reads payment from gtxn
-        app_id: APP_ID,
-        payment: {{ amount: priceMicro }},  // exact on-chain price → never rejected
+    try {{
+      // ─── Attempt real x402 HTTP flow ──────────────────────────────────────
+      // Step 1: Fetch the endpoint — expect 402
+      const initialResp = await fetch(url, {{
+        ...options,
+        headers: {{ ...((options?.headers as any) || {{}}), 'Accept': 'application/json' }},
       }});
 
-      // Payment verified on-chain — generate receipt
-      const receipt: PaymentReceipt = {{
-        txId: result?.txId || 'tx_' + Math.random().toString(36).slice(2, 10).toUpperCase(),
-        amount: (priceMicro / 1_000_000) + ' ALGO',
-        timestamp: Date.now(),
-        network: X402_CONFIG.network,
-      }};
-      setLastReceipt(receipt);
+      // If we get 402, this is a real x402 server — do the full flow
+      if (initialResp.status === 402) {{
+        // Step 2: Parse payment requirements from the response
+        const paymentRequiredHeader = initialResp.headers.get('PAYMENT-REQUIRED') 
+          || initialResp.headers.get('payment-required');
+        
+        let paymentRequirements: any;
+        if (paymentRequiredHeader) {{
+          try {{
+            paymentRequirements = JSON.parse(paymentRequiredHeader);
+          }} catch {{
+            // Try reading from body
+            const body = await initialResp.json().catch(() => null);
+            paymentRequirements = body?.paymentRequirements || body?.accepts?.[0] || body;
+          }}
+        }} else {{
+          // Try body
+          const body = await initialResp.json().catch(() => null);
+          paymentRequirements = body?.paymentRequirements || body?.accepts?.[0] || body;
+        }}
 
-      // Simulate API response (in production, the x402 server serves real content after payment)
-      const mockResponse = {{
-        success: true,
-        data: generateMockApiResponse(url),
-        meta: {{
-          paid: true,
-          price: (priceMicro / 1_000_000) + ' ALGO',
+        if (!paymentRequirements) {{
+          throw new Error('Server returned 402 but no payment requirements found');
+        }}
+
+        // Handle array of accepts — pick the first Algorand one
+        const reqs = Array.isArray(paymentRequirements) ? paymentRequirements : [paymentRequirements];
+        const algoReq = reqs.find((r: any) => r.network?.includes('algorand')) || reqs[0];
+
+        // Step 3: Sign payment via bridge
+        const signResult = await signX402Payment(algoReq, url);
+
+        // Step 4: Retry with X-PAYMENT header
+        const retryResp = await fetch(url, {{
+          ...options,
+          headers: {{
+            ...((options?.headers as any) || {{}}),
+            'Accept': 'application/json',
+            'X-PAYMENT': signResult.signedPayment || signResult.txnBytes,
+          }},
+        }});
+
+        if (!retryResp.ok) {{
+          const errBody = await retryResp.text().catch(() => '');
+          throw new Error(`x402 retry failed (${{retryResp.status}}): ${{errBody.slice(0, 200)}}`);
+        }}
+
+        const data = await retryResp.json();
+
+        // Build receipt
+        const receipt: PaymentReceipt = {{
+          txId: signResult.txId || 'pending',
+          amount: (algoReq.price || '{price}'),
+          timestamp: Date.now(),
+          network: algoReq.network || 'algorand-testnet',
           protocol: 'x402',
-          settledOn: 'Algorand Testnet',
-          appId: APP_ID,
-        }},
-      }};
-      setLastResponse(mockResponse);
+        }};
+        setLastReceipt(receipt);
+        setLastResponse(data);
 
-      return {{ data: mockResponse, paid: true, receipt }};
-    }} catch (err) {{
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      throw err;
+        return {{ data, paid: true, receipt, mode: 'x402-http' }};
+      }}
+
+      // If we get 200 directly (no paywall), just return the response
+      if (initialResp.ok) {{
+        const data = await initialResp.json();
+        setLastResponse(data);
+        return {{ data, paid: false, mode: 'x402-http' }};
+      }}
+
+      // Other error
+      throw new Error(`Server returned ${{initialResp.status}}: ${{await initialResp.text().catch(() => '')}}`);
+
+    }} catch (fetchErr: any) {{
+      // ─── Fallback: contract-direct payment (no x402 server reachable) ─────
+      // If the fetch fails entirely (CORS, network, etc.), fall back to
+      // paying the contract directly and returning a mock response.
+      if (fetchErr.name === 'TypeError' || fetchErr.message?.includes('fetch')) {{
+        console.warn('[x402] Server unreachable, falling back to contract-direct payment');
+        
+        // Read on-chain price
+        let priceMicro = X402_CONFIG.pricePerCallMicro;
+        try {{
+          const state: any = await readState(APP_ID);
+          const onChainPrice = state?.price_per_call ?? state?.pricePerCall ?? state?.p;
+          if (onChainPrice !== undefined && onChainPrice !== null) {{
+            const parsed = Number(onChainPrice);
+            if (!isNaN(parsed) && parsed > 0) priceMicro = parsed;
+          }}
+        }} catch {{}}
+
+        // Pay contract directly
+        await callMethod({{
+          method: 'record_payment',
+          args: [],
+          app_id: APP_ID,
+          payment: {{ amount: priceMicro }},
+        }});
+
+        const receipt: PaymentReceipt = {{
+          txId: 'contract_direct_' + Math.random().toString(36).slice(2, 10),
+          amount: (priceMicro / 1_000_000) + ' ALGO',
+          timestamp: Date.now(),
+          network: X402_CONFIG.network,
+          protocol: 'x402',
+        }};
+        setLastReceipt(receipt);
+
+        const mockResponse = {{
+          success: true,
+          data: {{ message: 'Payment verified (contract-direct mode)', timestamp: new Date().toISOString() }},
+          meta: {{ paid: true, price: (priceMicro / 1_000_000) + ' ALGO', mode: 'contract-direct', appId: APP_ID }},
+        }};
+        setLastResponse(mockResponse);
+        return {{ data: mockResponse, paid: true, receipt, mode: 'contract-direct' }};
+      }}
+
+      // Re-throw x402 protocol errors
+      setError(fetchErr.message);
+      throw fetchErr;
     }} finally {{
       setPaying(false);
     }}
@@ -896,33 +1005,6 @@ export const useX402Client = () => {{
     config: X402_CONFIG,
   }};
 }};
-
-function generateMockApiResponse(url: string): any {{
-  // Generate contextual mock data based on the URL
-  if (url.includes('weather')) {{
-    return {{
-      temperature: Math.floor(Math.random() * 30) + 15,
-      condition: ['sunny', 'cloudy', 'partly cloudy', 'rainy'][Math.floor(Math.random() * 4)],
-      humidity: Math.floor(Math.random() * 60) + 30,
-      wind: Math.floor(Math.random() * 20) + 5,
-      city: url.split('/').pop() || 'Unknown',
-    }};
-  }}
-  if (url.includes('joke') || url.includes('humor')) {{
-    const jokes = [
-      'Why do programmers prefer dark mode? Because light attracts bugs.',
-      'There are only 10 types of people in the world: those who understand binary and those who don\\'t.',
-      'A SQL query walks into a bar, goes to two tables and asks: Can I join you?',
-    ];
-    return {{ joke: jokes[Math.floor(Math.random() * jokes.length)] }};
-  }}
-  return {{
-    message: 'API call successful',
-    endpoint: url,
-    timestamp: new Date().toISOString(),
-    data: {{ value: Math.floor(Math.random() * 1000), unit: 'credits' }},
-  }};
-}}
 """
 
 

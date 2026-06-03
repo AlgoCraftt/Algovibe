@@ -13,7 +13,8 @@ export type BridgeMessageType =
   | 'READ_STATE'        // Request global/local state reading
   | 'OPT_IN'            // Request app opt-in
   | 'GET_NETWORK'       // Request current network info
-  | 'SIGN_TRANSACTION'; // Request raw transaction signing
+  | 'SIGN_TRANSACTION'  // Request raw transaction signing
+  | 'SIGN_X402_PAYMENT'; // Sign an x402 payment for HTTP 402 flow
 
 export interface BridgeRequest {
   id: string;          // Unique request ID
@@ -50,4 +51,11 @@ export interface ReadStatePayload {
   appId: number | string;
   keys?: string[]; // Optional specific keys
   address?: string; // Optional for local state
+}
+
+export interface SignX402PaymentPayload {
+  /** The raw payment requirements from the server's 402 response */
+  paymentRequirements: any;
+  /** The resource URL the client is trying to access */
+  resourceUrl: string;
 }

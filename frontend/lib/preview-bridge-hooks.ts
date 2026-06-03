@@ -195,6 +195,133 @@ const HOOK_PATHS = [
   'hooks/useContractState.ts',
 ]
 
+/**
+ * Canonical preview version of useX402Client.ts with the x402 server URL baked in.
+ * This does the REAL spec-compliant x402 flow:
+ *   fetch(serverUrl) → 402 → SIGN_X402_PAYMENT via bridge → retry with X-PAYMENT → real response
+ */
+function buildPreviewX402ClientHook(serverUrl: string): string {
+  return `// [AlgoVibe Preview] x402 client — real HTTP 402 flow against configured server
+import { useState, useCallback } from 'react';
+import { useAlgorand } from './useAlgorand';
+import { APP_ID } from './useContract';
+
+const X402_SERVER_URL = ${JSON.stringify(serverUrl)};
+
+function signX402Payment(paymentRequirements: any, resourceUrl: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const id = 'x402_' + Math.random().toString(36).slice(2);
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler);
+      reject(new Error('x402 payment signing timed out — is your wallet connected?'));
+    }, 60000);
+    const handler = (e: MessageEvent) => {
+      if (e.data?.id === id && e.data?.type === 'ALGOCRAFT_RESPONSE') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', handler);
+        if (e.data.error) reject(new Error(e.data.error));
+        else resolve(e.data.result);
+      }
+    };
+    window.addEventListener('message', handler);
+    window.parent.postMessage({ id, type: 'SIGN_X402_PAYMENT', payload: { paymentRequirements, resourceUrl } }, '*');
+  });
+}
+
+export const useX402Client = () => {
+  const { activeAddress } = useAlgorand();
+  const [paying, setPaying] = useState(false);
+  const [lastReceipt, setLastReceipt] = useState<any>(null);
+  const [lastResponse, setLastResponse] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const payAndFetch = useCallback(async (_url?: string, options?: RequestInit) => {
+    if (!activeAddress) {
+      setError('Connect your wallet to make paid API calls');
+      throw new Error('Wallet not connected');
+    }
+
+    // Always use the configured x402 server URL (ignore any URL the UI passes)
+    const url = X402_SERVER_URL;
+    console.log('[x402] Calling configured server:', url);
+
+    setPaying(true);
+    setError(null);
+    setLastResponse(null);
+
+    try {
+      // Step 1: Fetch — expect 402
+      const initialResp = await fetch(url, {
+        ...options,
+        headers: { ...((options?.headers as any) || {}), 'Accept': 'application/json' },
+      });
+
+      if (initialResp.status === 402) {
+        // Step 2: Parse payment requirements
+        const header = initialResp.headers.get('PAYMENT-REQUIRED') || initialResp.headers.get('payment-required');
+        let paymentRequirements: any;
+        if (header) {
+          try { paymentRequirements = JSON.parse(header); }
+          catch { const b = await initialResp.json().catch(() => null); paymentRequirements = b?.paymentRequirements || b?.accepts?.[0] || b; }
+        } else {
+          const b = await initialResp.json().catch(() => null);
+          paymentRequirements = b?.paymentRequirements || b?.accepts?.[0] || b;
+        }
+        if (!paymentRequirements) throw new Error('Server returned 402 but no payment requirements found');
+
+        const reqs = Array.isArray(paymentRequirements) ? paymentRequirements : [paymentRequirements];
+        const algoReq = reqs.find((r: any) => String(r.network || '').includes('algorand')) || reqs[0];
+
+        // Step 3: Sign via bridge
+        const signResult = await signX402Payment(algoReq, url);
+
+        // Step 4: Retry with X-PAYMENT
+        const retryResp = await fetch(url, {
+          ...options,
+          headers: {
+            ...((options?.headers as any) || {}),
+            'Accept': 'application/json',
+            'X-PAYMENT': signResult.signedPayment || signResult.txnBytes,
+          },
+        });
+        if (!retryResp.ok) {
+          const t = await retryResp.text().catch(() => '');
+          throw new Error('x402 retry failed (' + retryResp.status + '): ' + t.slice(0, 200));
+        }
+        const data = await retryResp.json();
+        const receipt = {
+          txId: signResult.txId || 'verified',
+          amount: algoReq.price || '',
+          timestamp: Date.now(),
+          network: algoReq.network || 'algorand-testnet',
+          protocol: 'x402',
+        };
+        setLastReceipt(receipt);
+        setLastResponse(data);
+        return { data, paid: true, receipt, mode: 'x402-http' };
+      }
+
+      if (initialResp.ok) {
+        const data = await initialResp.json();
+        setLastResponse(data);
+        return { data, paid: false, mode: 'x402-http' };
+      }
+
+      const errText = await initialResp.text().catch(() => '');
+      throw new Error('Server returned ' + initialResp.status + ': ' + errText.slice(0, 200));
+    } catch (err: any) {
+      setError(err.message);
+      throw err;
+    } finally {
+      setPaying(false);
+    }
+  }, [activeAddress]);
+
+  return { payAndFetch, paying, lastReceipt, lastResponse, error, config: { serverUrl: X402_SERVER_URL } };
+};
+`
+}
+
 /** Ensure preview iframe always uses latest bridge hooks (fixes opt-in without re-export). */
 export function patchPreviewBridgeFiles(files: Record<string, string>): Record<string, string> {
   const out = { ...files }
@@ -213,5 +340,31 @@ export function patchPreviewBridgeFiles(files: Record<string, string>): Record<s
       if (slash !== p) out[slash] = PREVIEW_USE_CONTRACT_STATE_TS
     }
   }
+
+  // Inject x402 server URL — replace the ENTIRE useX402Client hook with a
+  // preview version that has the configured server URL baked in.
+  // (sessionStorage is accessible here because this runs in the PARENT window)
+  try {
+    const raw = sessionStorage.getItem('algovibe_x402_settings')
+    if (raw) {
+      const settings = JSON.parse(raw)
+      if (settings?.serverUrl && settings?.endpoint) {
+        const base = settings.serverUrl.replace(/\/$/, '')
+        const path = settings.endpoint.startsWith('/') ? settings.endpoint : '/' + settings.endpoint
+        const fullUrl = base + path
+        const previewHook = buildPreviewX402ClientHook(fullUrl)
+
+        // Replace every useX402Client file (with or without leading slash)
+        for (const p of Object.keys(out)) {
+          if (p.includes('useX402Client')) {
+            out[p] = previewHook
+          }
+        }
+      }
+    }
+  } catch {
+    // No x402 settings or parse error — skip injection
+  }
+
   return out
 }
