@@ -62,36 +62,37 @@ For x402_service specs:
 - The ui_requirements should describe an x402 client demo UI that shows the pay-and-access flow
 - Add "x402_integration": true to the spec so downstream agents know to generate x402 middleware code
 - CRITICAL: record_payment MUST NOT accept (caller, amount) as arguments — that's insecure. It reads from gtxn.
+- IMPORTANT: For the on-chain demo, payment_asset MUST be "ALGO" and prices in microALGO. The contract verifies a PaymentTxn (ALGO), NOT an asset transfer. USDC requires ASA opt-in which breaks the preview. Use ALGO for the live demo; the x402 server code still references USDC conceptually for production.
 
 ## EXAMPLE GOOD SPEC (for "Build a pay-per-call weather API using x402"):
 {
   "template_type": "x402_service",
   "spec": {
     "name": "WeatherPayPerCall",
-    "description": "A pay-per-call weather API that charges USDC per request using x402 protocol on Algorand",
+    "description": "A pay-per-call weather API that charges ALGO per request using x402 protocol on Algorand",
     "x402_integration": true,
     "x402_config": {
-      "price_per_call": "$0.01",
-      "payment_asset": "USDC",
+      "price_per_call": "$0.005",
+      "payment_asset": "ALGO",
       "network": "testnet",
       "facilitator_url": "https://facilitator.goplausible.xyz"
     },
     "global_state": [
       {"name": "owner", "type": "Address", "description": "Service owner who receives payments"},
       {"name": "total_calls", "type": "uint64", "description": "Total API calls served"},
-      {"name": "total_earned", "type": "uint64", "description": "Total microUSDC earned"},
-      {"name": "price_per_call", "type": "uint64", "description": "Price per call in microUSDC"}
+      {"name": "total_earned", "type": "uint64", "description": "Total microALGO earned"},
+      {"name": "price_per_call", "type": "uint64", "description": "Price per call in microALGO"}
     ],
     "local_state": [],
     "box_storage": [],
     "methods": [
       {"name": "create", "args": [{"name": "price_per_call", "type": "uint64"}], "returns": "void", "description": "Initialize service with price config", "on_complete": "NoOp"},
-      {"name": "record_payment", "args": [], "returns": "void", "description": "Verify and record payment from atomic group transaction (trustless — reads payment from gtxn)", "on_complete": "NoOp"},
+      {"name": "record_payment", "args": [], "returns": "void", "description": "Verify and record payment from atomic group transaction (trustless — reads ALGO PaymentTxn from gtxn)", "on_complete": "NoOp"},
       {"name": "get_stats", "args": [], "returns": "uint64", "description": "Get total calls served", "on_complete": "NoOp"},
       {"name": "withdraw", "args": [], "returns": "void", "description": "Owner withdraws accumulated earnings", "on_complete": "NoOp"}
     ],
-    "ui_requirements": ["Service dashboard showing total calls and earnings", "Demo pay-per-call button that simulates x402 flow", "Price display and payment status", "Owner withdraw earnings button"],
-    "business_logic": ["Only owner can withdraw", "Payment recording verifies caller identity", "Price is set at creation and tracked on-chain"]
+    "ui_requirements": ["Service dashboard showing total calls and earnings", "Demo pay-per-call button that triggers the x402 ALGO payment flow", "Price display and payment status", "Owner withdraw earnings button"],
+    "business_logic": ["Only owner can withdraw", "Payment verified on-chain via atomic group (gtxn)", "Price is set at creation and tracked on-chain"]
   }
 }
 

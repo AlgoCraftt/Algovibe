@@ -395,6 +395,8 @@ This is an x402 pay-per-call service dApp. The UI must demonstrate the x402 paym
    - Display payment status (idle → paying → success/error)
    - Show the API response data after successful payment
    - Display payment receipt/txId after settlement
+   - IMPORTANT: The useX402Client hook calls record_payment with ZERO args + a payment field.
+     The contract verifies the payment via gtxn (atomic group). This is trustless.
 
 4. SERVICE STATS: Show on-chain stats from the contract (total calls, total earned, price per call) using the normal useContract + readState pattern.
 
@@ -671,8 +673,9 @@ def generate_x402_client_hook(x402_config: dict, app_id: str) -> str:
     """Generate the useX402Client React hook for x402 pay-per-call demo."""
     price = x402_config.get("price_per_call", "$0.01")
     return f"""// x402 Client Hook — demonstrates the x402 pay-per-call flow
-// In production, this would use @x402-avm/fetch with a real wallet signer.
-// In Sandpack preview, it simulates the flow via the bridge protocol.
+// In the preview, this uses the bridge's built-in payment grouping.
+// The bridge constructs [PaymentTxn, AppCallTxn] as an atomic group automatically
+// when you pass a `payment` field to callMethod.
 import {{ useState, useCallback }} from 'react';
 import {{ useAlgorand }} from './useAlgorand';
 import {{ APP_ID }} from './useContract';
@@ -699,16 +702,17 @@ export const useX402Client = () => {{
   const [error, setError] = useState<string | null>(null);
 
   /**
-   * Simulates the x402 pay-and-fetch flow:
-   * 1. Client requests the paid endpoint
-   * 2. Server responds with 402 + payment requirements
-   * 3. Client wallet signs payment transaction
-   * 4. Facilitator verifies and settles on-chain
-   * 5. Client retries with PAYMENT-SIGNATURE header
-   * 6. Server returns the paid content
+   * Pay-and-call flow for x402:
+   * 
+   * The bridge handles the atomic group construction:
+   *   [0] PaymentTxn (user → contract address, amount = price)
+   *   [1] AppCallTxn (record_payment with 0 args)
+   * 
+   * The contract's record_payment() reads the payment from gtxn group index 0
+   * and verifies receiver + amount on-chain. Fully trustless.
    *
-   * In this preview, we simulate via the contract's record_payment method
-   * and return mock API data to demonstrate the UX flow.
+   * In production (outside Sandpack), this would be handled by @x402-avm/fetch
+   * which intercepts 402 responses and auto-pays.
    */
   const payAndFetch = useCallback(async (url: string, options?: RequestInit): Promise<X402Response> => {{
     if (!activeAddress) {{
@@ -721,26 +725,31 @@ export const useX402Client = () => {{
     setLastResponse(null);
 
     try {{
-      // Step 1: Simulate x402 payment via contract method call
-      // In production, this is handled by @x402-avm/fetch automatically
-      const priceInMicroUnits = X402_CONFIG.pricePerCallMicro;
-      
-      await callMethod({{
+      // Call record_payment with ZERO args but include payment field.
+      // The bridge will:
+      //   1. Build a PaymentTxn (user → contract, amount microALGO)
+      //   2. Build an AppCallTxn (record_payment selector, 0 ABI args)
+      //   3. Group them atomically with assignGroupID
+      //   4. Sign both via wallet
+      //
+      // The contract then verifies the payment via gtxn.PaymentTxn(0)
+      const result: any = await callMethod({{
         method: 'record_payment',
-        args: [activeAddress, priceInMicroUnits],
+        args: [],  // ZERO args — contract reads payment from gtxn
         app_id: APP_ID,
+        payment: {{ amount: X402_CONFIG.pricePerCallMicro }},  // triggers atomic group
       }});
 
-      // Step 2: Payment settled — generate receipt
+      // Payment verified on-chain — generate receipt
       const receipt: PaymentReceipt = {{
-        txId: 'tx_' + Math.random().toString(36).slice(2, 10).toUpperCase(),
+        txId: result?.txId || 'tx_' + Math.random().toString(36).slice(2, 10).toUpperCase(),
         amount: X402_CONFIG.priceDisplay,
         timestamp: Date.now(),
         network: X402_CONFIG.network,
       }};
       setLastReceipt(receipt);
 
-      // Step 3: Simulate API response (in production, this is the real response after payment)
+      // Simulate API response (in production, the x402 server serves real content after payment)
       const mockResponse = {{
         success: true,
         data: generateMockApiResponse(url),

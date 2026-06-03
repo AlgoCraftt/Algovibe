@@ -535,10 +535,10 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
 // This contract is the ON-CHAIN payment verifier + accounting layer for an x402-gated API.
 // It verifies REAL payment transactions in the atomic group — not just trusted input.
 // 
-// x402 flow: Client pays → Facilitator groups payment + app call → Contract verifies payment in group
+// x402 flow: Client pays ALGO → Bridge groups [PaymentTxn, AppCallTxn] → Contract verifies via gtxn
 //
-// KEY SECURITY PATTERN: record_payment MUST verify a real AssetTransfer/Payment 
-// exists in the same atomic transaction group using gtxn. This makes it trustless.
+// KEY SECURITY PATTERN: record_payment MUST verify a real ALGO Payment (type=pay) 
+// exists in the same atomic transaction group using gtxn.PaymentTxn. This makes it trustless.
 
 import {{ Contract, GlobalState, abimethod, uint64, Txn, Global, Uint64, Bytes, assert, Account, itxn, gtxn }} from '@algorandfoundation/algorand-typescript'
 
@@ -546,49 +546,48 @@ export class {safe_name} extends Contract {{
 
   // Service configuration
   owner = GlobalState<Account>({{ key: 'o' }})
-  pricePerCall = GlobalState<uint64>({{ key: 'p' }})  // in microALGO or microUSDC
+  pricePerCall = GlobalState<uint64>({{ key: 'p' }})  // price in microALGO
   totalCalls = GlobalState<uint64>({{ key: 'tc' }})
   totalEarned = GlobalState<uint64>({{ key: 'te' }})
 
   public createApplication(): void {{
     this.owner.value = Txn.sender
-    this.pricePerCall.value = Uint64(5000)  // default 0.005 USDC (6 decimals)
+    this.pricePerCall.value = Uint64(5000)  // 5000 microALGO = 0.005 ALGO
     this.totalCalls.value = Uint64(0)
     this.totalEarned.value = Uint64(0)
   }}
 
   /**
-   * record_payment — TRUSTLESS payment verification.
+   * record_payment — TRUSTLESS payment verification via atomic group.
    * 
-   * This method verifies that a REAL payment transaction exists in the same
-   * atomic transaction group (via gtxn). The facilitator groups:
-   *   [0] = Payment/AssetTransfer (client → this app / owner)
-   *   [1] = This app call (record_payment)
+   * The bridge/facilitator constructs an atomic group:
+   *   Group[0] = PaymentTxn (type=pay, ALGO transfer from client → contract app address)
+   *   Group[1] = AppCallTxn (this method call)
    *
-   * The contract checks:
-   *   - A payment tx exists in the group (gtxn index 0)
-   *   - The payment receiver is this contract's address or the owner
-   *   - The amount meets the minimum price
+   * This method uses gtxn.PaymentTxn(Uint64(0)) which:
+   *   - Reads the transaction at group index 0
+   *   - Asserts it IS a PaymentTxn (type=1, i.e. ALGO transfer)
+   *   - Gives access to .receiver and .amount properties
    *
-   * This means nobody can fake a payment — the AVM enforces atomicity.
+   * IMPORTANT: Use gtxn.PaymentTxn — NOT gtxn.AssetTransferTxn. 
+   * The bridge sends ALGO payments (type=pay), not ASA transfers.
    */
   @abimethod()
   public record_payment(): void {{
-    // Verify a payment transaction exists in this atomic group
-    // The payment must be at index 0 in the group
+    // Read the PaymentTxn at group index 0 (asserts type == Payment)
     const payment = gtxn.PaymentTxn(Uint64(0))
     
-    // Verify payment goes to the contract account (or owner)
+    // Verify payment receiver is the contract's own application address
     assert(
       payment.receiver === Global.currentApplicationAddress,
       'Payment must be sent to the contract'
     )
     
-    // Verify payment amount meets the price
+    // Verify payment meets minimum price
     const amount: uint64 = payment.amount
     assert(amount >= this.pricePerCall.value, 'Payment below minimum price')
     
-    // Payment verified on-chain — update accounting
+    // Payment verified — update stats
     this.totalCalls.value = this.totalCalls.value + Uint64(1)
     this.totalEarned.value = this.totalEarned.value + amount
   }}
@@ -623,15 +622,21 @@ export class {safe_name} extends Contract {{
 ```
 
 CRITICAL x402 SECURITY PATTERN:
-- record_payment() MUST use `gtxn.PaymentTxn(Uint64(0))` to verify a REAL payment exists in the atomic group
-- Check `payment.receiver` is the contract address (`Global.currentApplicationAddress`) or the owner
+- record_payment() MUST use `gtxn.PaymentTxn(Uint64(0))` — this reads a PAYMENT (type=pay, ALGO transfer) at group index 0
+- DO NOT use gtxn.AssetTransferTxn — the bridge sends ALGO payments, not ASA transfers
+- Check `payment.receiver === Global.currentApplicationAddress` (the contract's app address)
 - Check `payment.amount >= this.pricePerCall.value`
 - This is TRUSTLESS — the AVM enforces that both transactions succeed or both fail
 - Do NOT accept caller/amount as function arguments — read them from the actual transaction group
-- The facilitator constructs the atomic group: [PaymentTxn, AppCallTxn(record_payment)]
+- The bridge constructs the atomic group: [PaymentTxn(index 0), AppCallTxn(index 1)]
+- The bridge sends payment.receiver = getApplicationAddress(appId) = Global.currentApplicationAddress
 
-DO NOT use a pattern where record_payment takes (caller, amount) args — that's insecure.
-Instead, read the payment details directly from gtxn. This is what makes it verifiable.
+IMPORTANT NOTES:
+- record_payment takes ZERO ABI arguments. It reads payment data from the group transaction at index 0.
+- The contract account must have minimum balance (0.1 ALGO) to receive payments. Fund it after deploy.
+- Use `payment.amount` (a property, NOT a function call) to read the amount.
+- Use `payment.receiver` (a property) to verify destination.
+- NEVER use gtxn.AssetTransferTxn for this — the bridge sends type=pay (ALGO), not type=axfer (ASA).
 
 Fill in the === FILL === sections. Do not deviate from the import line or class structure."""
 
