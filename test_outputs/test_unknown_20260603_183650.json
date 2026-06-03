@@ -1,0 +1,20 @@
+{
+  "prompt": "Build a pay-per-call joke API that charges 0.005 ALGO per request using x402",
+  "framework": "puyats",
+  "model": "google/gemini-2.5-flash-preview",
+  "template_type": null,
+  "spec": null,
+  "contract_code": null,
+  "arc32_methods": [],
+  "build_id": null,
+  "event_count": 1,
+  "elapsed_s": 2.8,
+  "events": [
+    {
+      "step": "error",
+      "message": "Invalid API key. Check AI Settings and try again.",
+      "status": "failed",
+      "error_code": "invalid_api_key"
+    }
+  ]
+}

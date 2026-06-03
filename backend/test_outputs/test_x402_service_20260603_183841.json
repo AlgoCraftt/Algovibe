@@ -1,0 +1,535 @@
+{
+  "prompt": "Build a pay-per-call joke API that charges 0.005 ALGO per request using x402",
+  "framework": "puyats",
+  "model": "gemini-3-flash-preview",
+  "template_type": "x402_service",
+  "spec": {
+    "name": "JokePayPerCall",
+    "description": "A pay-per-call joke API that charges ALGO per request using x402 protocol on Algorand",
+    "x402_integration": true,
+    "x402_config": {
+      "price_per_call": "0.005 ALGO",
+      "payment_asset": "ALGO",
+      "network": "testnet",
+      "facilitator_url": "https://facilitator.goplausible.xyz"
+    },
+    "global_state": [
+      {
+        "name": "owner",
+        "type": "Address",
+        "description": "Service owner who receives payments"
+      },
+      {
+        "name": "total_calls",
+        "type": "uint64",
+        "description": "Total jokes served"
+      },
+      {
+        "name": "total_earned",
+        "type": "uint64",
+        "description": "Total microALGO earned"
+      },
+      {
+        "name": "price_per_call",
+        "type": "uint64",
+        "description": "Price per joke in microALGO"
+      }
+    ],
+    "local_state": [],
+    "box_storage": [],
+    "methods": [
+      {
+        "name": "create",
+        "args": [
+          {
+            "name": "price_per_call",
+            "type": "uint64"
+          }
+        ],
+        "returns": "void",
+        "description": "Initialize joke service with price config",
+        "on_complete": "NoOp"
+      },
+      {
+        "name": "record_payment",
+        "args": [],
+        "returns": "void",
+        "description": "Verify and record payment from atomic group transaction (trustless \u2014 reads ALGO PaymentTxn from gtxn)",
+        "on_complete": "NoOp"
+      },
+      {
+        "name": "get_stats",
+        "args": [],
+        "returns": "uint64",
+        "description": "Get total jokes served",
+        "on_complete": "NoOp"
+      },
+      {
+        "name": "withdraw",
+        "args": [],
+        "returns": "void",
+        "description": "Owner withdraws accumulated earnings",
+        "on_complete": "NoOp"
+      }
+    ],
+    "ui_requirements": [
+      "Service dashboard showing total jokes served and earnings",
+      "Demo 'Get Joke' button that triggers the x402 ALGO payment flow",
+      "Price display (0.005 ALGO) and payment status",
+      "Owner withdraw earnings button"
+    ],
+    "business_logic": [
+      "Only owner can withdraw funds",
+      "Payment verified on-chain via atomic group (gtxn) reading PaymentTxn(0)",
+      "Contract verifies payment receiver is the contract address and amount meets price",
+      "Price is set at creation (5000 microALGO for 0.005 ALGO)"
+    ]
+  },
+  "contract_code": "import { Contract, GlobalState, abimethod, uint64, bytes, Txn, Global, Uint64, Bytes, assert, Account, itxn, gtxn, clone } from '@algorandfoundation/algorand-typescript'\n\nexport class JokePayPerCall extends Contract {\n  // Service configuration and accounting\n  owner = GlobalState<Account>({ key: 'o' })\n  pricePerCall = GlobalState<uint64>({ key: 'p' })\n  totalCalls = GlobalState<uint64>({ key: 'tc' })\n  totalEarned = GlobalState<uint64>({ key: 'te' })\n\n  /**\n   * createApplication\n   * Lifecycle method called on contract creation.\n   * Initializes the service owner and default pricing.\n   */\n  public createApplication(): void {\n    this.owner.value = Txn.sender\n    this.totalCalls.value = Uint64(0)\n    this.totalEarned.value = Uint64(0)\n    // Default price: 0.005 ALGO = 5000 microALGOs\n    this.pricePerCall.value = Uint64(5000)\n  }\n\n  /**\n   * record_payment\n   * Trustless on-chain verification for x402 payments.\n   * Expects an atomic group where:\n   * gtxn[0]: PaymentTxn (ALGO from user to contract)\n   * gtxn[1]: AppCall (this method)\n   */\n  @abimethod()\n  public record_payment(): void {\n    // 1. Access the payment transaction at the start of the group\n    const payment = gtxn.PaymentTxn(Uint64(0))\n\n    // 2. Security: Verify the payment is actually sent to this contract\n    assert(\n      payment.receiver === Global.currentApplicationAddress,\n      'Payment must be sent to the contract address'\n    )\n\n    // 3. Security: Verify the amount covers the current price\n    const paidAmount: uint64 = payment.amount\n    assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n\n    // 4. Accounting: Update global state\n    this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    this.totalEarned.value = this.totalEarned.value + paidAmount\n  }\n\n  /**\n   * set_price\n   * Allows the owner to update the microALGO cost per joke.\n   */\n  @abimethod()\n  public set_price(newPrice: uint64): void {\n    assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    this.pricePerCall.value = newPrice\n  }\n\n  /**\n   * get_stats\n   * Returns the total number of jokes served.\n   */\n  @abimethod()\n  public get_stats(): uint64 {\n    const calls: uint64 = this.totalCalls.value\n    return calls\n  }\n\n  /**\n   * withdraw\n   * Allows the owner to claim accumulated ALGO from the contract.\n   */\n  @abimethod()\n  public withdraw(): void {\n    // 1. Authorization check\n    assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n\n    // 2. Balance check\n    const amountToWithdraw: uint64 = this.totalEarned.value\n    assert(amountToWithdraw > Uint64(0), 'No funds available for withdrawal')\n\n    // 3. Perform inner transaction to send ALGO to owner\n    // Fee is set to 0 to utilize fee pooling from the caller\n    itxn\n      .payment({\n        receiver: this.owner.value,\n        amount: amountToWithdraw,\n        fee: Uint64(0),\n      })\n      .submit()\n\n    // 4. Reset earnings counter\n    this.totalEarned.value = Uint64(0)\n  }\n}",
+  "arc32_methods": [
+    "createApplication",
+    "record_payment",
+    "set_price",
+    "get_stats",
+    "withdraw"
+  ],
+  "build_id": "711430de-0756-417f-8538-8d1efae2ec8e",
+  "event_count": 17,
+  "elapsed_s": 44.4,
+  "events": [
+    {
+      "step": "analyzing",
+      "message": "Analyzing your request..."
+    },
+    {
+      "step": "analyzing",
+      "message": "Creating a JokePayPerCall",
+      "template_type": "x402_service",
+      "spec": {
+        "name": "JokePayPerCall",
+        "description": "A pay-per-call joke API that charges ALGO per request using x402 protocol on Algorand",
+        "x402_integration": true,
+        "x402_config": {
+          "price_per_call": "0.005 ALGO",
+          "payment_asset": "ALGO",
+          "network": "testnet",
+          "facilitator_url": "https://facilitator.goplausible.xyz"
+        },
+        "global_state": [
+          {
+            "name": "owner",
+            "type": "Address",
+            "description": "Service owner who receives payments"
+          },
+          {
+            "name": "total_calls",
+            "type": "uint64",
+            "description": "Total jokes served"
+          },
+          {
+            "name": "total_earned",
+            "type": "uint64",
+            "description": "Total microALGO earned"
+          },
+          {
+            "name": "price_per_call",
+            "type": "uint64",
+            "description": "Price per joke in microALGO"
+          }
+        ],
+        "local_state": [],
+        "box_storage": [],
+        "methods": [
+          {
+            "name": "create",
+            "args": [
+              {
+                "name": "price_per_call",
+                "type": "uint64"
+              }
+            ],
+            "returns": "void",
+            "description": "Initialize joke service with price config",
+            "on_complete": "NoOp"
+          },
+          {
+            "name": "record_payment",
+            "args": [],
+            "returns": "void",
+            "description": "Verify and record payment from atomic group transaction (trustless \u2014 reads ALGO PaymentTxn from gtxn)",
+            "on_complete": "NoOp"
+          },
+          {
+            "name": "get_stats",
+            "args": [],
+            "returns": "uint64",
+            "description": "Get total jokes served",
+            "on_complete": "NoOp"
+          },
+          {
+            "name": "withdraw",
+            "args": [],
+            "returns": "void",
+            "description": "Owner withdraws accumulated earnings",
+            "on_complete": "NoOp"
+          }
+        ],
+        "ui_requirements": [
+          "Service dashboard showing total jokes served and earnings",
+          "Demo 'Get Joke' button that triggers the x402 ALGO payment flow",
+          "Price display (0.005 ALGO) and payment status",
+          "Owner withdraw earnings button"
+        ],
+        "business_logic": [
+          "Only owner can withdraw funds",
+          "Payment verified on-chain via atomic group (gtxn) reading PaymentTxn(0)",
+          "Contract verifies payment receiver is the contract address and amount meets price",
+          "Price is set at creation (5000 microALGO for 0.005 ALGO)"
+        ]
+      }
+    },
+    {
+      "step": "retrieving_docs",
+      "message": "Fetching Algorand docs for puyats..."
+    },
+    {
+      "step": "retrieving_docs",
+      "message": "Retrieved 0 relevant sections"
+    },
+    {
+      "step": "generating_contract",
+      "message": "Generating smart contract code..."
+    },
+    {
+      "step": "generating_contract",
+      "message": "Writing smart contract code..."
+    },
+    {
+      "step": "generating_contract",
+      "message": "Contract code ready"
+    },
+    {
+      "step": "compiling",
+      "message": "Compiling contract..."
+    },
+    {
+      "step": "compiling",
+      "message": "Compiling contract..."
+    },
+    {
+      "step": "compiling",
+      "message": "Compilation successful",
+      "approval_teal": "#pragma version 11\n#pragma typetrack false\n\n// @algorandfoundation/algorand-typescript/arc4/index.d.ts::Contract.approvalProgram() -> uint64:\nmain:\n    intcblock 0 1\n    bytecblock \"te\" \"tc\" \"o\" \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:3\n    // export class JokePayPerCall extends Contract {\n    txn OnCompletion\n    !\n    assert // OnCompletion must be NoOp\n    txn ApplicationID\n    bz main_create_NoOp@8\n    pushbytess 0xf25cf76e 0xcc760037 0xf2eb2936 0xb7355fd1 // method \"record_payment()void\", method \"set_price(uint64)void\", method \"get_stats()uint64\", method \"withdraw()void\"\n    txna ApplicationArgs 0\n    match record_payment set_price get_stats withdraw\n    err\n\nmain_create_NoOp@8:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:3\n    // export class JokePayPerCall extends Contract {\n    pushbytes 0xb8447b36 // method \"createApplication()void\"\n    txna ApplicationArgs 0\n    match createApplication\n    err\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.createApplication[routing]() -> void:\ncreateApplication:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:16\n    // this.owner.value = Txn.sender\n    txn Sender\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:17\n    // this.totalCalls.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:18\n    // this.totalEarned.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:20\n    // this.pricePerCall.value = Uint64(5000)\n    pushint 5000 // 5000\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:15\n    // public createApplication(): void {\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.record_payment[routing]() -> void:\nrecord_payment:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:33\n    // const payment = gtxn.PaymentTxn(Uint64(0))\n    intc_0 // 0\n    gtxns TypeEnum\n    intc_1 // pay\n    ==\n    assert // transaction type is pay\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:37\n    // payment.receiver === Global.currentApplicationAddress,\n    gtxns Receiver\n    global CurrentApplicationAddress\n    ==\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:36-39\n    // assert(\n    //   payment.receiver === Global.currentApplicationAddress,\n    //   'Payment must be sent to the contract address'\n    // )\n    assert // Payment must be sent to the contract address\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:33\n    // const payment = gtxn.PaymentTxn(Uint64(0))\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:42\n    // const paidAmount: uint64 = payment.amount\n    gtxns Amount\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:43\n    // assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:43\n    // assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n    app_global_get_ex\n    assert // check GlobalState exists\n    dig 1\n    <=\n    assert // Insufficient payment amount\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    app_global_get_ex\n    assert // check GlobalState exists\n    intc_1 // 1\n    +\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    app_global_get_ex\n    assert // check GlobalState exists\n    +\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:30\n    // @abimethod()\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.set_price[routing]() -> void:\nset_price:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:54\n    // @abimethod()\n    txna ApplicationArgs 1\n    dup\n    len\n    pushint 8 // 8\n    ==\n    assert // invalid number of bytes for arc4.uint64\n    btoi\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:56\n    // assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    txn Sender\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:56\n    // assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    app_global_get_ex\n    assert // check GlobalState exists\n    ==\n    assert // Only owner can update price\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:57\n    // this.pricePerCall.value = newPrice\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:54\n    // @abimethod()\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.get_stats[routing]() -> void:\nget_stats:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:66\n    // const calls: uint64 = this.totalCalls.value\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:66\n    // const calls: uint64 = this.totalCalls.value\n    app_global_get_ex\n    assert // check GlobalState exists\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:64\n    // @abimethod()\n    itob\n    pushbytes 0x151f7c75\n    swap\n    concat\n    log\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.withdraw[routing]() -> void:\nwithdraw:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:77\n    // assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n    txn Sender\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:77\n    // assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n    app_global_get_ex\n    assert // check GlobalState exists\n    swap\n    dig 1\n    ==\n    assert // Only owner can withdraw\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:80\n    // const amountToWithdraw: uint64 = this.totalEarned.value\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:80\n    // const amountToWithdraw: uint64 = this.totalEarned.value\n    app_global_get_ex\n    assert // check GlobalState exists\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:81\n    // assert(amountToWithdraw > Uint64(0), 'No funds available for withdrawal')\n    dup\n    assert // No funds available for withdrawal\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-91\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    //   .submit()\n    itxn_begin\n    itxn_field Amount\n    itxn_field Receiver\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-90\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    intc_1 // 1\n    itxn_field TypeEnum\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:89\n    // fee: Uint64(0),\n    intc_0 // 0\n    itxn_field Fee\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-91\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    //   .submit()\n    itxn_submit\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:94\n    // this.totalEarned.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:74\n    // @abimethod()\n    intc_1 // 1\n    return\n",
+      "clear_teal": "#pragma version 11\n#pragma typetrack false\n\n// @algorandfoundation/algorand-typescript/base-contract.d.ts::BaseContract.clearStateProgram() -> uint64:\nmain:\n    pushint 1 // 1\n    return\n",
+      "arc32_spec": {
+        "hints": {
+          "createApplication()void": {
+            "call_config": {
+              "no_op": "CREATE"
+            }
+          },
+          "record_payment()void": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          },
+          "set_price(uint64)void": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          },
+          "get_stats()uint64": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          },
+          "withdraw()void": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          }
+        },
+        "source": {
+          "approval": "I3ByYWdtYSB2ZXJzaW9uIDExCiNwcmFnbWEgdHlwZXRyYWNrIGZhbHNlCgovLyBAYWxnb3JhbmRmb3VuZGF0aW9uL2FsZ29yYW5kLXR5cGVzY3JpcHQvYXJjNC9pbmRleC5kLnRzOjpDb250cmFjdC5hcHByb3ZhbFByb2dyYW0oKSAtPiB1aW50NjQ6Cm1haW46CiAgICBpbnRjYmxvY2sgMCAxCiAgICBieXRlY2Jsb2NrICJ0ZSIgInRjIiAibyIgInAiCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjMKICAgIC8vIGV4cG9ydCBjbGFzcyBKb2tlUGF5UGVyQ2FsbCBleHRlbmRzIENvbnRyYWN0IHsKICAgIHR4biBPbkNvbXBsZXRpb24KICAgICEKICAgIGFzc2VydCAvLyBPbkNvbXBsZXRpb24gbXVzdCBiZSBOb09wCiAgICB0eG4gQXBwbGljYXRpb25JRAogICAgYnogbWFpbl9jcmVhdGVfTm9PcEA4CiAgICBwdXNoYnl0ZXNzIDB4ZjI1Y2Y3NmUgMHhjYzc2MDAzNyAweGYyZWIyOTM2IDB4YjczNTVmZDEgLy8gbWV0aG9kICJyZWNvcmRfcGF5bWVudCgpdm9pZCIsIG1ldGhvZCAic2V0X3ByaWNlKHVpbnQ2NCl2b2lkIiwgbWV0aG9kICJnZXRfc3RhdHMoKXVpbnQ2NCIsIG1ldGhvZCAid2l0aGRyYXcoKXZvaWQiCiAgICB0eG5hIEFwcGxpY2F0aW9uQXJncyAwCiAgICBtYXRjaCByZWNvcmRfcGF5bWVudCBzZXRfcHJpY2UgZ2V0X3N0YXRzIHdpdGhkcmF3CiAgICBlcnIKCm1haW5fY3JlYXRlX05vT3BAODoKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MwogICAgLy8gZXhwb3J0IGNsYXNzIEpva2VQYXlQZXJDYWxsIGV4dGVuZHMgQ29udHJhY3QgewogICAgcHVzaGJ5dGVzIDB4Yjg0NDdiMzYgLy8gbWV0aG9kICJjcmVhdGVBcHBsaWNhdGlvbigpdm9pZCIKICAgIHR4bmEgQXBwbGljYXRpb25BcmdzIDAKICAgIG1hdGNoIGNyZWF0ZUFwcGxpY2F0aW9uCiAgICBlcnIKCgovLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjpKb2tlUGF5UGVyQ2FsbC5jcmVhdGVBcHBsaWNhdGlvbltyb3V0aW5nXSgpIC0+IHZvaWQ6CmNyZWF0ZUFwcGxpY2F0aW9uOgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1CiAgICAvLyBvd25lciA9IEdsb2JhbFN0YXRlPEFjY291bnQ+KHsga2V5OiAnbycgfSkKICAgIGJ5dGVjXzIgLy8gIm8iCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjE2CiAgICAvLyB0aGlzLm93bmVyLnZhbHVlID0gVHhuLnNlbmRlcgogICAgdHhuIFNlbmRlcgogICAgYXBwX2dsb2JhbF9wdXQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NwogICAgLy8gdG90YWxDYWxscyA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0YycgfSkKICAgIGJ5dGVjXzEgLy8gInRjIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czoxNwogICAgLy8gdGhpcy50b3RhbENhbGxzLnZhbHVlID0gVWludDY0KDApCiAgICBpbnRjXzAgLy8gMAogICAgYXBwX2dsb2JhbF9wdXQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6OAogICAgLy8gdG90YWxFYXJuZWQgPSBHbG9iYWxTdGF0ZTx1aW50NjQ+KHsga2V5OiAndGUnIH0pCiAgICBieXRlY18wIC8vICJ0ZSIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MTgKICAgIC8vIHRoaXMudG90YWxFYXJuZWQudmFsdWUgPSBVaW50NjQoMCkKICAgIGludGNfMCAvLyAwCiAgICBhcHBfZ2xvYmFsX3B1dAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo2CiAgICAvLyBwcmljZVBlckNhbGwgPSBHbG9iYWxTdGF0ZTx1aW50NjQ+KHsga2V5OiAncCcgfSkKICAgIGJ5dGVjXzMgLy8gInAiCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjIwCiAgICAvLyB0aGlzLnByaWNlUGVyQ2FsbC52YWx1ZSA9IFVpbnQ2NCg1MDAwKQogICAgcHVzaGludCA1MDAwIC8vIDUwMDAKICAgIGFwcF9nbG9iYWxfcHV0CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjE1CiAgICAvLyBwdWJsaWMgY3JlYXRlQXBwbGljYXRpb24oKTogdm9pZCB7CiAgICBpbnRjXzEgLy8gMQogICAgcmV0dXJuCgoKLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo6Sm9rZVBheVBlckNhbGwucmVjb3JkX3BheW1lbnRbcm91dGluZ10oKSAtPiB2b2lkOgpyZWNvcmRfcGF5bWVudDoKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MzMKICAgIC8vIGNvbnN0IHBheW1lbnQgPSBndHhuLlBheW1lbnRUeG4oVWludDY0KDApKQogICAgaW50Y18wIC8vIDAKICAgIGd0eG5zIFR5cGVFbnVtCiAgICBpbnRjXzEgLy8gcGF5CiAgICA9PQogICAgYXNzZXJ0IC8vIHRyYW5zYWN0aW9uIHR5cGUgaXMgcGF5CiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czozNwogICAgLy8gcGF5bWVudC5yZWNlaXZlciA9PT0gR2xvYmFsLmN1cnJlbnRBcHBsaWNhdGlvbkFkZHJlc3MsCiAgICBndHhucyBSZWNlaXZlcgogICAgZ2xvYmFsIEN1cnJlbnRBcHBsaWNhdGlvbkFkZHJlc3MKICAgID09CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjM2LTM5CiAgICAvLyBhc3NlcnQoCiAgICAvLyAgIHBheW1lbnQucmVjZWl2ZXIgPT09IEdsb2JhbC5jdXJyZW50QXBwbGljYXRpb25BZGRyZXNzLAogICAgLy8gICAnUGF5bWVudCBtdXN0IGJlIHNlbnQgdG8gdGhlIGNvbnRyYWN0IGFkZHJlc3MnCiAgICAvLyApCiAgICBhc3NlcnQgLy8gUGF5bWVudCBtdXN0IGJlIHNlbnQgdG8gdGhlIGNvbnRyYWN0IGFkZHJlc3MKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MzMKICAgIC8vIGNvbnN0IHBheW1lbnQgPSBndHhuLlBheW1lbnRUeG4oVWludDY0KDApKQogICAgaW50Y18wIC8vIDAKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDIKICAgIC8vIGNvbnN0IHBhaWRBbW91bnQ6IHVpbnQ2NCA9IHBheW1lbnQuYW1vdW50CiAgICBndHhucyBBbW91bnQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDMKICAgIC8vIGFzc2VydChwYWlkQW1vdW50ID49IHRoaXMucHJpY2VQZXJDYWxsLnZhbHVlLCAnSW5zdWZmaWNpZW50IHBheW1lbnQgYW1vdW50JykKICAgIGludGNfMCAvLyAwCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjYKICAgIC8vIHByaWNlUGVyQ2FsbCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICdwJyB9KQogICAgYnl0ZWNfMyAvLyAicCIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDMKICAgIC8vIGFzc2VydChwYWlkQW1vdW50ID49IHRoaXMucHJpY2VQZXJDYWxsLnZhbHVlLCAnSW5zdWZmaWNpZW50IHBheW1lbnQgYW1vdW50JykKICAgIGFwcF9nbG9iYWxfZ2V0X2V4CiAgICBhc3NlcnQgLy8gY2hlY2sgR2xvYmFsU3RhdGUgZXhpc3RzCiAgICBkaWcgMQogICAgPD0KICAgIGFzc2VydCAvLyBJbnN1ZmZpY2llbnQgcGF5bWVudCBhbW91bnQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDYKICAgIC8vIHRoaXMudG90YWxDYWxscy52YWx1ZSA9IHRoaXMudG90YWxDYWxscy52YWx1ZSArIFVpbnQ2NCgxKQogICAgaW50Y18wIC8vIDAKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NwogICAgLy8gdG90YWxDYWxscyA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0YycgfSkKICAgIGJ5dGVjXzEgLy8gInRjIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NgogICAgLy8gdGhpcy50b3RhbENhbGxzLnZhbHVlID0gdGhpcy50b3RhbENhbGxzLnZhbHVlICsgVWludDY0KDEpCiAgICBhcHBfZ2xvYmFsX2dldF9leAogICAgYXNzZXJ0IC8vIGNoZWNrIEdsb2JhbFN0YXRlIGV4aXN0cwogICAgaW50Y18xIC8vIDEKICAgICsKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NwogICAgLy8gdG90YWxDYWxscyA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0YycgfSkKICAgIGJ5dGVjXzEgLy8gInRjIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NgogICAgLy8gdGhpcy50b3RhbENhbGxzLnZhbHVlID0gdGhpcy50b3RhbENhbGxzLnZhbHVlICsgVWludDY0KDEpCiAgICBzd2FwCiAgICBhcHBfZ2xvYmFsX3B1dAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NwogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IHRoaXMudG90YWxFYXJuZWQudmFsdWUgKyBwYWlkQW1vdW50CiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NwogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IHRoaXMudG90YWxFYXJuZWQudmFsdWUgKyBwYWlkQW1vdW50CiAgICBhcHBfZ2xvYmFsX2dldF9leAogICAgYXNzZXJ0IC8vIGNoZWNrIEdsb2JhbFN0YXRlIGV4aXN0cwogICAgKwogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NwogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IHRoaXMudG90YWxFYXJuZWQudmFsdWUgKyBwYWlkQW1vdW50CiAgICBzd2FwCiAgICBhcHBfZ2xvYmFsX3B1dAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czozMAogICAgLy8gQGFiaW1ldGhvZCgpCiAgICBpbnRjXzEgLy8gMQogICAgcmV0dXJuCgoKLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo6Sm9rZVBheVBlckNhbGwuc2V0X3ByaWNlW3JvdXRpbmddKCkgLT4gdm9pZDoKc2V0X3ByaWNlOgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1NAogICAgLy8gQGFiaW1ldGhvZCgpCiAgICB0eG5hIEFwcGxpY2F0aW9uQXJncyAxCiAgICBkdXAKICAgIGxlbgogICAgcHVzaGludCA4IC8vIDgKICAgID09CiAgICBhc3NlcnQgLy8gaW52YWxpZCBudW1iZXIgb2YgYnl0ZXMgZm9yIGFyYzQudWludDY0CiAgICBidG9pCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjU2CiAgICAvLyBhc3NlcnQoVHhuLnNlbmRlciA9PT0gdGhpcy5vd25lci52YWx1ZSwgJ09ubHkgb3duZXIgY2FuIHVwZGF0ZSBwcmljZScpCiAgICB0eG4gU2VuZGVyCiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1CiAgICAvLyBvd25lciA9IEdsb2JhbFN0YXRlPEFjY291bnQ+KHsga2V5OiAnbycgfSkKICAgIGJ5dGVjXzIgLy8gIm8iCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjU2CiAgICAvLyBhc3NlcnQoVHhuLnNlbmRlciA9PT0gdGhpcy5vd25lci52YWx1ZSwgJ09ubHkgb3duZXIgY2FuIHVwZGF0ZSBwcmljZScpCiAgICBhcHBfZ2xvYmFsX2dldF9leAogICAgYXNzZXJ0IC8vIGNoZWNrIEdsb2JhbFN0YXRlIGV4aXN0cwogICAgPT0KICAgIGFzc2VydCAvLyBPbmx5IG93bmVyIGNhbiB1cGRhdGUgcHJpY2UKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NgogICAgLy8gcHJpY2VQZXJDYWxsID0gR2xvYmFsU3RhdGU8dWludDY0Pih7IGtleTogJ3AnIH0pCiAgICBieXRlY18zIC8vICJwIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1NwogICAgLy8gdGhpcy5wcmljZVBlckNhbGwudmFsdWUgPSBuZXdQcmljZQogICAgc3dhcAogICAgYXBwX2dsb2JhbF9wdXQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NTQKICAgIC8vIEBhYmltZXRob2QoKQogICAgaW50Y18xIC8vIDEKICAgIHJldHVybgoKCi8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6Okpva2VQYXlQZXJDYWxsLmdldF9zdGF0c1tyb3V0aW5nXSgpIC0+IHZvaWQ6CmdldF9zdGF0czoKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NjYKICAgIC8vIGNvbnN0IGNhbGxzOiB1aW50NjQgPSB0aGlzLnRvdGFsQ2FsbHMudmFsdWUKICAgIGludGNfMCAvLyAwCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjcKICAgIC8vIHRvdGFsQ2FsbHMgPSBHbG9iYWxTdGF0ZTx1aW50NjQ+KHsga2V5OiAndGMnIH0pCiAgICBieXRlY18xIC8vICJ0YyIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NjYKICAgIC8vIGNvbnN0IGNhbGxzOiB1aW50NjQgPSB0aGlzLnRvdGFsQ2FsbHMudmFsdWUKICAgIGFwcF9nbG9iYWxfZ2V0X2V4CiAgICBhc3NlcnQgLy8gY2hlY2sgR2xvYmFsU3RhdGUgZXhpc3RzCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjY0CiAgICAvLyBAYWJpbWV0aG9kKCkKICAgIGl0b2IKICAgIHB1c2hieXRlcyAweDE1MWY3Yzc1CiAgICBzd2FwCiAgICBjb25jYXQKICAgIGxvZwogICAgaW50Y18xIC8vIDEKICAgIHJldHVybgoKCi8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6Okpva2VQYXlQZXJDYWxsLndpdGhkcmF3W3JvdXRpbmddKCkgLT4gdm9pZDoKd2l0aGRyYXc6CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjc3CiAgICAvLyBhc3NlcnQoVHhuLnNlbmRlciA9PT0gdGhpcy5vd25lci52YWx1ZSwgJ09ubHkgb3duZXIgY2FuIHdpdGhkcmF3JykKICAgIHR4biBTZW5kZXIKICAgIGludGNfMCAvLyAwCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjUKICAgIC8vIG93bmVyID0gR2xvYmFsU3RhdGU8QWNjb3VudD4oeyBrZXk6ICdvJyB9KQogICAgYnl0ZWNfMiAvLyAibyIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NzcKICAgIC8vIGFzc2VydChUeG4uc2VuZGVyID09PSB0aGlzLm93bmVyLnZhbHVlLCAnT25seSBvd25lciBjYW4gd2l0aGRyYXcnKQogICAgYXBwX2dsb2JhbF9nZXRfZXgKICAgIGFzc2VydCAvLyBjaGVjayBHbG9iYWxTdGF0ZSBleGlzdHMKICAgIHN3YXAKICAgIGRpZyAxCiAgICA9PQogICAgYXNzZXJ0IC8vIE9ubHkgb3duZXIgY2FuIHdpdGhkcmF3CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjgwCiAgICAvLyBjb25zdCBhbW91bnRUb1dpdGhkcmF3OiB1aW50NjQgPSB0aGlzLnRvdGFsRWFybmVkLnZhbHVlCiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4MAogICAgLy8gY29uc3QgYW1vdW50VG9XaXRoZHJhdzogdWludDY0ID0gdGhpcy50b3RhbEVhcm5lZC52YWx1ZQogICAgYXBwX2dsb2JhbF9nZXRfZXgKICAgIGFzc2VydCAvLyBjaGVjayBHbG9iYWxTdGF0ZSBleGlzdHMKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6ODEKICAgIC8vIGFzc2VydChhbW91bnRUb1dpdGhkcmF3ID4gVWludDY0KDApLCAnTm8gZnVuZHMgYXZhaWxhYmxlIGZvciB3aXRoZHJhd2FsJykKICAgIGR1cAogICAgYXNzZXJ0IC8vIE5vIGZ1bmRzIGF2YWlsYWJsZSBmb3Igd2l0aGRyYXdhbAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4NS05MQogICAgLy8gaXR4bgogICAgLy8gICAucGF5bWVudCh7CiAgICAvLyAgICAgcmVjZWl2ZXI6IHRoaXMub3duZXIudmFsdWUsCiAgICAvLyAgICAgYW1vdW50OiBhbW91bnRUb1dpdGhkcmF3LAogICAgLy8gICAgIGZlZTogVWludDY0KDApLAogICAgLy8gICB9KQogICAgLy8gICAuc3VibWl0KCkKICAgIGl0eG5fYmVnaW4KICAgIGl0eG5fZmllbGQgQW1vdW50CiAgICBpdHhuX2ZpZWxkIFJlY2VpdmVyCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjg1LTkwCiAgICAvLyBpdHhuCiAgICAvLyAgIC5wYXltZW50KHsKICAgIC8vICAgICByZWNlaXZlcjogdGhpcy5vd25lci52YWx1ZSwKICAgIC8vICAgICBhbW91bnQ6IGFtb3VudFRvV2l0aGRyYXcsCiAgICAvLyAgICAgZmVlOiBVaW50NjQoMCksCiAgICAvLyAgIH0pCiAgICBpbnRjXzEgLy8gMQogICAgaXR4bl9maWVsZCBUeXBlRW51bQogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4OQogICAgLy8gZmVlOiBVaW50NjQoMCksCiAgICBpbnRjXzAgLy8gMAogICAgaXR4bl9maWVsZCBGZWUKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6ODUtOTEKICAgIC8vIGl0eG4KICAgIC8vICAgLnBheW1lbnQoewogICAgLy8gICAgIHJlY2VpdmVyOiB0aGlzLm93bmVyLnZhbHVlLAogICAgLy8gICAgIGFtb3VudDogYW1vdW50VG9XaXRoZHJhdywKICAgIC8vICAgICBmZWU6IFVpbnQ2NCgwKSwKICAgIC8vICAgfSkKICAgIC8vICAgLnN1Ym1pdCgpCiAgICBpdHhuX3N1Ym1pdAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo5NAogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IFVpbnQ2NCgwKQogICAgaW50Y18wIC8vIDAKICAgIGFwcF9nbG9iYWxfcHV0CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjc0CiAgICAvLyBAYWJpbWV0aG9kKCkKICAgIGludGNfMSAvLyAxCiAgICByZXR1cm4K",
+          "clear": "I3ByYWdtYSB2ZXJzaW9uIDExCiNwcmFnbWEgdHlwZXRyYWNrIGZhbHNlCgovLyBAYWxnb3JhbmRmb3VuZGF0aW9uL2FsZ29yYW5kLXR5cGVzY3JpcHQvYmFzZS1jb250cmFjdC5kLnRzOjpCYXNlQ29udHJhY3QuY2xlYXJTdGF0ZVByb2dyYW0oKSAtPiB1aW50NjQ6Cm1haW46CiAgICBwdXNoaW50IDEgLy8gMQogICAgcmV0dXJuCg=="
+        },
+        "state": {
+          "global": {
+            "num_byte_slices": 1,
+            "num_uints": 3
+          },
+          "local": {
+            "num_byte_slices": 0,
+            "num_uints": 0
+          }
+        },
+        "schema": {
+          "global": {
+            "declared": {
+              "owner": {
+                "type": "bytes",
+                "key": "o"
+              },
+              "pricePerCall": {
+                "type": "uint64",
+                "key": "p"
+              },
+              "totalCalls": {
+                "type": "uint64",
+                "key": "tc"
+              },
+              "totalEarned": {
+                "type": "uint64",
+                "key": "te"
+              }
+            },
+            "reserved": {}
+          },
+          "local": {
+            "declared": {},
+            "reserved": {}
+          }
+        },
+        "contract": {
+          "name": "JokePayPerCall",
+          "methods": [
+            {
+              "name": "createApplication",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "createApplication\nLifecycle method called on contract creation.\nInitializes the service owner and default pricing."
+            },
+            {
+              "name": "record_payment",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "record_payment\nTrustless on-chain verification for x402 payments.\nExpects an atomic group where:\ngtxn[0]: PaymentTxn (ALGO from user to contract)\ngtxn[1]: AppCall (this method)"
+            },
+            {
+              "name": "set_price",
+              "args": [
+                {
+                  "type": "uint64",
+                  "name": "newPrice"
+                }
+              ],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "set_price\nAllows the owner to update the microALGO cost per joke."
+            },
+            {
+              "name": "get_stats",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "uint64"
+              },
+              "desc": "get_stats\nReturns the total number of jokes served."
+            },
+            {
+              "name": "withdraw",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "withdraw\nAllows the owner to claim accumulated ALGO from the contract."
+            }
+          ],
+          "networks": {}
+        },
+        "bare_call_config": {}
+      }
+    },
+    {
+      "step": "compiling",
+      "message": "Compilation successful!"
+    },
+    {
+      "step": "auditing",
+      "message": "Running security audit on contract..."
+    },
+    {
+      "step": "audit_complete",
+      "message": "Security audit: 1 warning (4 checks)",
+      "audit_report": {
+        "passed": true,
+        "has_critical": false,
+        "checks_run": 4,
+        "llm_reviewed": true,
+        "critical_count": 0,
+        "warning_count": 1,
+        "findings": [
+          {
+            "id": "payment_amount",
+            "severity": "warning",
+            "title": "Grouped payment amount not validated",
+            "detail": "The contract reads a payment but does not assert a minimum amount.",
+            "fix_hint": "assert(payment.amount >= this.pricePerCall.value, '...').",
+            "source": "deterministic"
+          }
+        ],
+        "summary": "Security audit: 1 warning (4 checks)"
+      }
+    },
+    {
+      "step": "generating_deployment",
+      "message": "Generating deployment script..."
+    },
+    {
+      "step": "deployment_code_ready",
+      "message": "Deployment code generated",
+      "deployment_code": "\nimport algosdk from 'algosdk';\n\nexport async function deployContract(algodClient, signer, senderAddress) {\n  const approvalTeal = `#pragma version 11\n#pragma typetrack false\n\n// @algorandfoundation/algorand-typescript/arc4/index.d.ts::Contract.approvalProgram() -> uint64:\nmain:\n    intcblock 0 1\n    bytecblock \"te\" \"tc\" \"o\" \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:3\n    // export class JokePayPerCall extends Contract {\n    txn OnCompletion\n    !\n    assert // OnCompletion must be NoOp\n    txn ApplicationID\n    bz main_create_NoOp@8\n    pushbytess 0xf25cf76e 0xcc760037 0xf2eb2936 0xb7355fd1 // method \"record_payment()void\", method \"set_price(uint64)void\", method \"get_stats()uint64\", method \"withdraw()void\"\n    txna ApplicationArgs 0\n    match record_payment set_price get_stats withdraw\n    err\n\nmain_create_NoOp@8:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:3\n    // export class JokePayPerCall extends Contract {\n    pushbytes 0xb8447b36 // method \"createApplication()void\"\n    txna ApplicationArgs 0\n    match createApplication\n    err\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.createApplication[routing]() -> void:\ncreateApplication:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:16\n    // this.owner.value = Txn.sender\n    txn Sender\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:17\n    // this.totalCalls.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:18\n    // this.totalEarned.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:20\n    // this.pricePerCall.value = Uint64(5000)\n    pushint 5000 // 5000\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:15\n    // public createApplication(): void {\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.record_payment[routing]() -> void:\nrecord_payment:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:33\n    // const payment = gtxn.PaymentTxn(Uint64(0))\n    intc_0 // 0\n    gtxns TypeEnum\n    intc_1 // pay\n    ==\n    assert // transaction type is pay\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:37\n    // payment.receiver === Global.currentApplicationAddress,\n    gtxns Receiver\n    global CurrentApplicationAddress\n    ==\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:36-39\n    // assert(\n    //   payment.receiver === Global.currentApplicationAddress,\n    //   'Payment must be sent to the contract address'\n    // )\n    assert // Payment must be sent to the contract address\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:33\n    // const payment = gtxn.PaymentTxn(Uint64(0))\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:42\n    // const paidAmount: uint64 = payment.amount\n    gtxns Amount\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:43\n    // assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:43\n    // assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n    app_global_get_ex\n    assert // check GlobalState exists\n    dig 1\n    <=\n    assert // Insufficient payment amount\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    app_global_get_ex\n    assert // check GlobalState exists\n    intc_1 // 1\n    +\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    app_global_get_ex\n    assert // check GlobalState exists\n    +\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:30\n    // @abimethod()\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.set_price[routing]() -> void:\nset_price:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:54\n    // @abimethod()\n    txna ApplicationArgs 1\n    dup\n    len\n    pushint 8 // 8\n    ==\n    assert // invalid number of bytes for arc4.uint64\n    btoi\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:56\n    // assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    txn Sender\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:56\n    // assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    app_global_get_ex\n    assert // check GlobalState exists\n    ==\n    assert // Only owner can update price\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:57\n    // this.pricePerCall.value = newPrice\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:54\n    // @abimethod()\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.get_stats[routing]() -> void:\nget_stats:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:66\n    // const calls: uint64 = this.totalCalls.value\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:66\n    // const calls: uint64 = this.totalCalls.value\n    app_global_get_ex\n    assert // check GlobalState exists\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:64\n    // @abimethod()\n    itob\n    pushbytes 0x151f7c75\n    swap\n    concat\n    log\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.withdraw[routing]() -> void:\nwithdraw:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:77\n    // assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n    txn Sender\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:77\n    // assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n    app_global_get_ex\n    assert // check GlobalState exists\n    swap\n    dig 1\n    ==\n    assert // Only owner can withdraw\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:80\n    // const amountToWithdraw: uint64 = this.totalEarned.value\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:80\n    // const amountToWithdraw: uint64 = this.totalEarned.value\n    app_global_get_ex\n    assert // check GlobalState exists\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:81\n    // assert(amountToWithdraw > Uint64(0), 'No funds available for withdrawal')\n    dup\n    assert // No funds available for withdrawal\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-91\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    //   .submit()\n    itxn_begin\n    itxn_field Amount\n    itxn_field Receiver\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-90\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    intc_1 // 1\n    itxn_field TypeEnum\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:89\n    // fee: Uint64(0),\n    intc_0 // 0\n    itxn_field Fee\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-91\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    //   .submit()\n    itxn_submit\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:94\n    // this.totalEarned.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:74\n    // @abimethod()\n    intc_1 // 1\n    return\n`;\n  const clearTeal = `#pragma version 11\n#pragma typetrack false\n\n// @algorandfoundation/algorand-typescript/base-contract.d.ts::BaseContract.clearStateProgram() -> uint64:\nmain:\n    pushint 1 // 1\n    return\n`;\n\n  // Compile programs\n  const approvalResult = await algodClient.compile(approvalTeal).do();\n  const clearResult = await algodClient.compile(clearTeal).do();\n\n  const suggestedParams = await algodClient.getTransactionParams().do();\n\n  const txn = algosdk.makeApplicationCreateTxnFromObject({\n    from: senderAddress,\n    approvalProgram: new Uint8Array(Buffer.from(approvalResult.result, 'base64')),\n    clearProgram: new Uint8Array(Buffer.from(clearResult.result, 'base64')),\n    numGlobalInts: 3,\n    numGlobalByteSlices: 1,\n    numLocalInts: 0,\n    numLocalByteSlices: 0,\n    suggestedParams,\n    onComplete: algosdk.OnApplicationComplete.NoOpOC,\n  });\n\n  const signedTxn = await signer([txn], [0]);\n  const { txId } = await algodClient.sendRawTransaction(signedTxn).do();\n  const result = await algosdk.waitForConfirmation(algodClient, txId, 4);\n\n  return {\n    appId: result['application-index'],\n    txId\n  };\n}\n"
+    },
+    {
+      "step": "deploying",
+      "message": "Contract compiled successfully. Sign with your wallet to deploy on testnet."
+    },
+    {
+      "step": "sign_required",
+      "message": "Waiting for wallet signature\u2026",
+      "build_id": "711430de-0756-417f-8538-8d1efae2ec8e",
+      "unsigned_tx": "client-side",
+      "approval_teal": "#pragma version 11\n#pragma typetrack false\n\n// @algorandfoundation/algorand-typescript/arc4/index.d.ts::Contract.approvalProgram() -> uint64:\nmain:\n    intcblock 0 1\n    bytecblock \"te\" \"tc\" \"o\" \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:3\n    // export class JokePayPerCall extends Contract {\n    txn OnCompletion\n    !\n    assert // OnCompletion must be NoOp\n    txn ApplicationID\n    bz main_create_NoOp@8\n    pushbytess 0xf25cf76e 0xcc760037 0xf2eb2936 0xb7355fd1 // method \"record_payment()void\", method \"set_price(uint64)void\", method \"get_stats()uint64\", method \"withdraw()void\"\n    txna ApplicationArgs 0\n    match record_payment set_price get_stats withdraw\n    err\n\nmain_create_NoOp@8:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:3\n    // export class JokePayPerCall extends Contract {\n    pushbytes 0xb8447b36 // method \"createApplication()void\"\n    txna ApplicationArgs 0\n    match createApplication\n    err\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.createApplication[routing]() -> void:\ncreateApplication:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:16\n    // this.owner.value = Txn.sender\n    txn Sender\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:17\n    // this.totalCalls.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:18\n    // this.totalEarned.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:20\n    // this.pricePerCall.value = Uint64(5000)\n    pushint 5000 // 5000\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:15\n    // public createApplication(): void {\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.record_payment[routing]() -> void:\nrecord_payment:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:33\n    // const payment = gtxn.PaymentTxn(Uint64(0))\n    intc_0 // 0\n    gtxns TypeEnum\n    intc_1 // pay\n    ==\n    assert // transaction type is pay\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:37\n    // payment.receiver === Global.currentApplicationAddress,\n    gtxns Receiver\n    global CurrentApplicationAddress\n    ==\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:36-39\n    // assert(\n    //   payment.receiver === Global.currentApplicationAddress,\n    //   'Payment must be sent to the contract address'\n    // )\n    assert // Payment must be sent to the contract address\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:33\n    // const payment = gtxn.PaymentTxn(Uint64(0))\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:42\n    // const paidAmount: uint64 = payment.amount\n    gtxns Amount\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:43\n    // assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:43\n    // assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n    app_global_get_ex\n    assert // check GlobalState exists\n    dig 1\n    <=\n    assert // Insufficient payment amount\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    app_global_get_ex\n    assert // check GlobalState exists\n    intc_1 // 1\n    +\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:46\n    // this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    app_global_get_ex\n    assert // check GlobalState exists\n    +\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:47\n    // this.totalEarned.value = this.totalEarned.value + paidAmount\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:30\n    // @abimethod()\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.set_price[routing]() -> void:\nset_price:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:54\n    // @abimethod()\n    txna ApplicationArgs 1\n    dup\n    len\n    pushint 8 // 8\n    ==\n    assert // invalid number of bytes for arc4.uint64\n    btoi\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:56\n    // assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    txn Sender\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:56\n    // assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    app_global_get_ex\n    assert // check GlobalState exists\n    ==\n    assert // Only owner can update price\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:6\n    // pricePerCall = GlobalState<uint64>({ key: 'p' })\n    bytec_3 // \"p\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:57\n    // this.pricePerCall.value = newPrice\n    swap\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:54\n    // @abimethod()\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.get_stats[routing]() -> void:\nget_stats:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:66\n    // const calls: uint64 = this.totalCalls.value\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:7\n    // totalCalls = GlobalState<uint64>({ key: 'tc' })\n    bytec_1 // \"tc\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:66\n    // const calls: uint64 = this.totalCalls.value\n    app_global_get_ex\n    assert // check GlobalState exists\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:64\n    // @abimethod()\n    itob\n    pushbytes 0x151f7c75\n    swap\n    concat\n    log\n    intc_1 // 1\n    return\n\n\n// /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts::JokePayPerCall.withdraw[routing]() -> void:\nwithdraw:\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:77\n    // assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n    txn Sender\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:5\n    // owner = GlobalState<Account>({ key: 'o' })\n    bytec_2 // \"o\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:77\n    // assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n    app_global_get_ex\n    assert // check GlobalState exists\n    swap\n    dig 1\n    ==\n    assert // Only owner can withdraw\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:80\n    // const amountToWithdraw: uint64 = this.totalEarned.value\n    intc_0 // 0\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:80\n    // const amountToWithdraw: uint64 = this.totalEarned.value\n    app_global_get_ex\n    assert // check GlobalState exists\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:81\n    // assert(amountToWithdraw > Uint64(0), 'No funds available for withdrawal')\n    dup\n    assert // No funds available for withdrawal\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-91\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    //   .submit()\n    itxn_begin\n    itxn_field Amount\n    itxn_field Receiver\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-90\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    intc_1 // 1\n    itxn_field TypeEnum\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:89\n    // fee: Uint64(0),\n    intc_0 // 0\n    itxn_field Fee\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:85-91\n    // itxn\n    //   .payment({\n    //     receiver: this.owner.value,\n    //     amount: amountToWithdraw,\n    //     fee: Uint64(0),\n    //   })\n    //   .submit()\n    itxn_submit\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:8\n    // totalEarned = GlobalState<uint64>({ key: 'te' })\n    bytec_0 // \"te\"\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:94\n    // this.totalEarned.value = Uint64(0)\n    intc_0 // 0\n    app_global_put\n    // /tmp/puya-4d82fa7c-8fd9-4dde-bcc4-fba4c3e922e9-0vn1UB/contract.algo.ts:74\n    // @abimethod()\n    intc_1 // 1\n    return\n",
+      "clear_teal": "#pragma version 11\n#pragma typetrack false\n\n// @algorandfoundation/algorand-typescript/base-contract.d.ts::BaseContract.clearStateProgram() -> uint64:\nmain:\n    pushint 1 // 1\n    return\n",
+      "arc32_spec": {
+        "hints": {
+          "createApplication()void": {
+            "call_config": {
+              "no_op": "CREATE"
+            }
+          },
+          "record_payment()void": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          },
+          "set_price(uint64)void": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          },
+          "get_stats()uint64": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          },
+          "withdraw()void": {
+            "call_config": {
+              "no_op": "CALL"
+            }
+          }
+        },
+        "source": {
+          "approval": "I3ByYWdtYSB2ZXJzaW9uIDExCiNwcmFnbWEgdHlwZXRyYWNrIGZhbHNlCgovLyBAYWxnb3JhbmRmb3VuZGF0aW9uL2FsZ29yYW5kLXR5cGVzY3JpcHQvYXJjNC9pbmRleC5kLnRzOjpDb250cmFjdC5hcHByb3ZhbFByb2dyYW0oKSAtPiB1aW50NjQ6Cm1haW46CiAgICBpbnRjYmxvY2sgMCAxCiAgICBieXRlY2Jsb2NrICJ0ZSIgInRjIiAibyIgInAiCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjMKICAgIC8vIGV4cG9ydCBjbGFzcyBKb2tlUGF5UGVyQ2FsbCBleHRlbmRzIENvbnRyYWN0IHsKICAgIHR4biBPbkNvbXBsZXRpb24KICAgICEKICAgIGFzc2VydCAvLyBPbkNvbXBsZXRpb24gbXVzdCBiZSBOb09wCiAgICB0eG4gQXBwbGljYXRpb25JRAogICAgYnogbWFpbl9jcmVhdGVfTm9PcEA4CiAgICBwdXNoYnl0ZXNzIDB4ZjI1Y2Y3NmUgMHhjYzc2MDAzNyAweGYyZWIyOTM2IDB4YjczNTVmZDEgLy8gbWV0aG9kICJyZWNvcmRfcGF5bWVudCgpdm9pZCIsIG1ldGhvZCAic2V0X3ByaWNlKHVpbnQ2NCl2b2lkIiwgbWV0aG9kICJnZXRfc3RhdHMoKXVpbnQ2NCIsIG1ldGhvZCAid2l0aGRyYXcoKXZvaWQiCiAgICB0eG5hIEFwcGxpY2F0aW9uQXJncyAwCiAgICBtYXRjaCByZWNvcmRfcGF5bWVudCBzZXRfcHJpY2UgZ2V0X3N0YXRzIHdpdGhkcmF3CiAgICBlcnIKCm1haW5fY3JlYXRlX05vT3BAODoKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MwogICAgLy8gZXhwb3J0IGNsYXNzIEpva2VQYXlQZXJDYWxsIGV4dGVuZHMgQ29udHJhY3QgewogICAgcHVzaGJ5dGVzIDB4Yjg0NDdiMzYgLy8gbWV0aG9kICJjcmVhdGVBcHBsaWNhdGlvbigpdm9pZCIKICAgIHR4bmEgQXBwbGljYXRpb25BcmdzIDAKICAgIG1hdGNoIGNyZWF0ZUFwcGxpY2F0aW9uCiAgICBlcnIKCgovLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjpKb2tlUGF5UGVyQ2FsbC5jcmVhdGVBcHBsaWNhdGlvbltyb3V0aW5nXSgpIC0+IHZvaWQ6CmNyZWF0ZUFwcGxpY2F0aW9uOgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1CiAgICAvLyBvd25lciA9IEdsb2JhbFN0YXRlPEFjY291bnQ+KHsga2V5OiAnbycgfSkKICAgIGJ5dGVjXzIgLy8gIm8iCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjE2CiAgICAvLyB0aGlzLm93bmVyLnZhbHVlID0gVHhuLnNlbmRlcgogICAgdHhuIFNlbmRlcgogICAgYXBwX2dsb2JhbF9wdXQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NwogICAgLy8gdG90YWxDYWxscyA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0YycgfSkKICAgIGJ5dGVjXzEgLy8gInRjIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czoxNwogICAgLy8gdGhpcy50b3RhbENhbGxzLnZhbHVlID0gVWludDY0KDApCiAgICBpbnRjXzAgLy8gMAogICAgYXBwX2dsb2JhbF9wdXQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6OAogICAgLy8gdG90YWxFYXJuZWQgPSBHbG9iYWxTdGF0ZTx1aW50NjQ+KHsga2V5OiAndGUnIH0pCiAgICBieXRlY18wIC8vICJ0ZSIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MTgKICAgIC8vIHRoaXMudG90YWxFYXJuZWQudmFsdWUgPSBVaW50NjQoMCkKICAgIGludGNfMCAvLyAwCiAgICBhcHBfZ2xvYmFsX3B1dAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo2CiAgICAvLyBwcmljZVBlckNhbGwgPSBHbG9iYWxTdGF0ZTx1aW50NjQ+KHsga2V5OiAncCcgfSkKICAgIGJ5dGVjXzMgLy8gInAiCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjIwCiAgICAvLyB0aGlzLnByaWNlUGVyQ2FsbC52YWx1ZSA9IFVpbnQ2NCg1MDAwKQogICAgcHVzaGludCA1MDAwIC8vIDUwMDAKICAgIGFwcF9nbG9iYWxfcHV0CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjE1CiAgICAvLyBwdWJsaWMgY3JlYXRlQXBwbGljYXRpb24oKTogdm9pZCB7CiAgICBpbnRjXzEgLy8gMQogICAgcmV0dXJuCgoKLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo6Sm9rZVBheVBlckNhbGwucmVjb3JkX3BheW1lbnRbcm91dGluZ10oKSAtPiB2b2lkOgpyZWNvcmRfcGF5bWVudDoKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MzMKICAgIC8vIGNvbnN0IHBheW1lbnQgPSBndHhuLlBheW1lbnRUeG4oVWludDY0KDApKQogICAgaW50Y18wIC8vIDAKICAgIGd0eG5zIFR5cGVFbnVtCiAgICBpbnRjXzEgLy8gcGF5CiAgICA9PQogICAgYXNzZXJ0IC8vIHRyYW5zYWN0aW9uIHR5cGUgaXMgcGF5CiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czozNwogICAgLy8gcGF5bWVudC5yZWNlaXZlciA9PT0gR2xvYmFsLmN1cnJlbnRBcHBsaWNhdGlvbkFkZHJlc3MsCiAgICBndHhucyBSZWNlaXZlcgogICAgZ2xvYmFsIEN1cnJlbnRBcHBsaWNhdGlvbkFkZHJlc3MKICAgID09CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjM2LTM5CiAgICAvLyBhc3NlcnQoCiAgICAvLyAgIHBheW1lbnQucmVjZWl2ZXIgPT09IEdsb2JhbC5jdXJyZW50QXBwbGljYXRpb25BZGRyZXNzLAogICAgLy8gICAnUGF5bWVudCBtdXN0IGJlIHNlbnQgdG8gdGhlIGNvbnRyYWN0IGFkZHJlc3MnCiAgICAvLyApCiAgICBhc3NlcnQgLy8gUGF5bWVudCBtdXN0IGJlIHNlbnQgdG8gdGhlIGNvbnRyYWN0IGFkZHJlc3MKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6MzMKICAgIC8vIGNvbnN0IHBheW1lbnQgPSBndHhuLlBheW1lbnRUeG4oVWludDY0KDApKQogICAgaW50Y18wIC8vIDAKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDIKICAgIC8vIGNvbnN0IHBhaWRBbW91bnQ6IHVpbnQ2NCA9IHBheW1lbnQuYW1vdW50CiAgICBndHhucyBBbW91bnQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDMKICAgIC8vIGFzc2VydChwYWlkQW1vdW50ID49IHRoaXMucHJpY2VQZXJDYWxsLnZhbHVlLCAnSW5zdWZmaWNpZW50IHBheW1lbnQgYW1vdW50JykKICAgIGludGNfMCAvLyAwCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjYKICAgIC8vIHByaWNlUGVyQ2FsbCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICdwJyB9KQogICAgYnl0ZWNfMyAvLyAicCIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDMKICAgIC8vIGFzc2VydChwYWlkQW1vdW50ID49IHRoaXMucHJpY2VQZXJDYWxsLnZhbHVlLCAnSW5zdWZmaWNpZW50IHBheW1lbnQgYW1vdW50JykKICAgIGFwcF9nbG9iYWxfZ2V0X2V4CiAgICBhc3NlcnQgLy8gY2hlY2sgR2xvYmFsU3RhdGUgZXhpc3RzCiAgICBkaWcgMQogICAgPD0KICAgIGFzc2VydCAvLyBJbnN1ZmZpY2llbnQgcGF5bWVudCBhbW91bnQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NDYKICAgIC8vIHRoaXMudG90YWxDYWxscy52YWx1ZSA9IHRoaXMudG90YWxDYWxscy52YWx1ZSArIFVpbnQ2NCgxKQogICAgaW50Y18wIC8vIDAKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NwogICAgLy8gdG90YWxDYWxscyA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0YycgfSkKICAgIGJ5dGVjXzEgLy8gInRjIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NgogICAgLy8gdGhpcy50b3RhbENhbGxzLnZhbHVlID0gdGhpcy50b3RhbENhbGxzLnZhbHVlICsgVWludDY0KDEpCiAgICBhcHBfZ2xvYmFsX2dldF9leAogICAgYXNzZXJ0IC8vIGNoZWNrIEdsb2JhbFN0YXRlIGV4aXN0cwogICAgaW50Y18xIC8vIDEKICAgICsKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NwogICAgLy8gdG90YWxDYWxscyA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0YycgfSkKICAgIGJ5dGVjXzEgLy8gInRjIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NgogICAgLy8gdGhpcy50b3RhbENhbGxzLnZhbHVlID0gdGhpcy50b3RhbENhbGxzLnZhbHVlICsgVWludDY0KDEpCiAgICBzd2FwCiAgICBhcHBfZ2xvYmFsX3B1dAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NwogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IHRoaXMudG90YWxFYXJuZWQudmFsdWUgKyBwYWlkQW1vdW50CiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NwogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IHRoaXMudG90YWxFYXJuZWQudmFsdWUgKyBwYWlkQW1vdW50CiAgICBhcHBfZ2xvYmFsX2dldF9leAogICAgYXNzZXJ0IC8vIGNoZWNrIEdsb2JhbFN0YXRlIGV4aXN0cwogICAgKwogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo0NwogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IHRoaXMudG90YWxFYXJuZWQudmFsdWUgKyBwYWlkQW1vdW50CiAgICBzd2FwCiAgICBhcHBfZ2xvYmFsX3B1dAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czozMAogICAgLy8gQGFiaW1ldGhvZCgpCiAgICBpbnRjXzEgLy8gMQogICAgcmV0dXJuCgoKLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo6Sm9rZVBheVBlckNhbGwuc2V0X3ByaWNlW3JvdXRpbmddKCkgLT4gdm9pZDoKc2V0X3ByaWNlOgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1NAogICAgLy8gQGFiaW1ldGhvZCgpCiAgICB0eG5hIEFwcGxpY2F0aW9uQXJncyAxCiAgICBkdXAKICAgIGxlbgogICAgcHVzaGludCA4IC8vIDgKICAgID09CiAgICBhc3NlcnQgLy8gaW52YWxpZCBudW1iZXIgb2YgYnl0ZXMgZm9yIGFyYzQudWludDY0CiAgICBidG9pCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjU2CiAgICAvLyBhc3NlcnQoVHhuLnNlbmRlciA9PT0gdGhpcy5vd25lci52YWx1ZSwgJ09ubHkgb3duZXIgY2FuIHVwZGF0ZSBwcmljZScpCiAgICB0eG4gU2VuZGVyCiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1CiAgICAvLyBvd25lciA9IEdsb2JhbFN0YXRlPEFjY291bnQ+KHsga2V5OiAnbycgfSkKICAgIGJ5dGVjXzIgLy8gIm8iCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjU2CiAgICAvLyBhc3NlcnQoVHhuLnNlbmRlciA9PT0gdGhpcy5vd25lci52YWx1ZSwgJ09ubHkgb3duZXIgY2FuIHVwZGF0ZSBwcmljZScpCiAgICBhcHBfZ2xvYmFsX2dldF9leAogICAgYXNzZXJ0IC8vIGNoZWNrIEdsb2JhbFN0YXRlIGV4aXN0cwogICAgPT0KICAgIGFzc2VydCAvLyBPbmx5IG93bmVyIGNhbiB1cGRhdGUgcHJpY2UKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NgogICAgLy8gcHJpY2VQZXJDYWxsID0gR2xvYmFsU3RhdGU8dWludDY0Pih7IGtleTogJ3AnIH0pCiAgICBieXRlY18zIC8vICJwIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo1NwogICAgLy8gdGhpcy5wcmljZVBlckNhbGwudmFsdWUgPSBuZXdQcmljZQogICAgc3dhcAogICAgYXBwX2dsb2JhbF9wdXQKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NTQKICAgIC8vIEBhYmltZXRob2QoKQogICAgaW50Y18xIC8vIDEKICAgIHJldHVybgoKCi8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6Okpva2VQYXlQZXJDYWxsLmdldF9zdGF0c1tyb3V0aW5nXSgpIC0+IHZvaWQ6CmdldF9zdGF0czoKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NjYKICAgIC8vIGNvbnN0IGNhbGxzOiB1aW50NjQgPSB0aGlzLnRvdGFsQ2FsbHMudmFsdWUKICAgIGludGNfMCAvLyAwCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjcKICAgIC8vIHRvdGFsQ2FsbHMgPSBHbG9iYWxTdGF0ZTx1aW50NjQ+KHsga2V5OiAndGMnIH0pCiAgICBieXRlY18xIC8vICJ0YyIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NjYKICAgIC8vIGNvbnN0IGNhbGxzOiB1aW50NjQgPSB0aGlzLnRvdGFsQ2FsbHMudmFsdWUKICAgIGFwcF9nbG9iYWxfZ2V0X2V4CiAgICBhc3NlcnQgLy8gY2hlY2sgR2xvYmFsU3RhdGUgZXhpc3RzCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjY0CiAgICAvLyBAYWJpbWV0aG9kKCkKICAgIGl0b2IKICAgIHB1c2hieXRlcyAweDE1MWY3Yzc1CiAgICBzd2FwCiAgICBjb25jYXQKICAgIGxvZwogICAgaW50Y18xIC8vIDEKICAgIHJldHVybgoKCi8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6Okpva2VQYXlQZXJDYWxsLndpdGhkcmF3W3JvdXRpbmddKCkgLT4gdm9pZDoKd2l0aGRyYXc6CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjc3CiAgICAvLyBhc3NlcnQoVHhuLnNlbmRlciA9PT0gdGhpcy5vd25lci52YWx1ZSwgJ09ubHkgb3duZXIgY2FuIHdpdGhkcmF3JykKICAgIHR4biBTZW5kZXIKICAgIGludGNfMCAvLyAwCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjUKICAgIC8vIG93bmVyID0gR2xvYmFsU3RhdGU8QWNjb3VudD4oeyBrZXk6ICdvJyB9KQogICAgYnl0ZWNfMiAvLyAibyIKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6NzcKICAgIC8vIGFzc2VydChUeG4uc2VuZGVyID09PSB0aGlzLm93bmVyLnZhbHVlLCAnT25seSBvd25lciBjYW4gd2l0aGRyYXcnKQogICAgYXBwX2dsb2JhbF9nZXRfZXgKICAgIGFzc2VydCAvLyBjaGVjayBHbG9iYWxTdGF0ZSBleGlzdHMKICAgIHN3YXAKICAgIGRpZyAxCiAgICA9PQogICAgYXNzZXJ0IC8vIE9ubHkgb3duZXIgY2FuIHdpdGhkcmF3CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjgwCiAgICAvLyBjb25zdCBhbW91bnRUb1dpdGhkcmF3OiB1aW50NjQgPSB0aGlzLnRvdGFsRWFybmVkLnZhbHVlCiAgICBpbnRjXzAgLy8gMAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4MAogICAgLy8gY29uc3QgYW1vdW50VG9XaXRoZHJhdzogdWludDY0ID0gdGhpcy50b3RhbEVhcm5lZC52YWx1ZQogICAgYXBwX2dsb2JhbF9nZXRfZXgKICAgIGFzc2VydCAvLyBjaGVjayBHbG9iYWxTdGF0ZSBleGlzdHMKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6ODEKICAgIC8vIGFzc2VydChhbW91bnRUb1dpdGhkcmF3ID4gVWludDY0KDApLCAnTm8gZnVuZHMgYXZhaWxhYmxlIGZvciB3aXRoZHJhd2FsJykKICAgIGR1cAogICAgYXNzZXJ0IC8vIE5vIGZ1bmRzIGF2YWlsYWJsZSBmb3Igd2l0aGRyYXdhbAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4NS05MQogICAgLy8gaXR4bgogICAgLy8gICAucGF5bWVudCh7CiAgICAvLyAgICAgcmVjZWl2ZXI6IHRoaXMub3duZXIudmFsdWUsCiAgICAvLyAgICAgYW1vdW50OiBhbW91bnRUb1dpdGhkcmF3LAogICAgLy8gICAgIGZlZTogVWludDY0KDApLAogICAgLy8gICB9KQogICAgLy8gICAuc3VibWl0KCkKICAgIGl0eG5fYmVnaW4KICAgIGl0eG5fZmllbGQgQW1vdW50CiAgICBpdHhuX2ZpZWxkIFJlY2VpdmVyCiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjg1LTkwCiAgICAvLyBpdHhuCiAgICAvLyAgIC5wYXltZW50KHsKICAgIC8vICAgICByZWNlaXZlcjogdGhpcy5vd25lci52YWx1ZSwKICAgIC8vICAgICBhbW91bnQ6IGFtb3VudFRvV2l0aGRyYXcsCiAgICAvLyAgICAgZmVlOiBVaW50NjQoMCksCiAgICAvLyAgIH0pCiAgICBpbnRjXzEgLy8gMQogICAgaXR4bl9maWVsZCBUeXBlRW51bQogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4OQogICAgLy8gZmVlOiBVaW50NjQoMCksCiAgICBpbnRjXzAgLy8gMAogICAgaXR4bl9maWVsZCBGZWUKICAgIC8vIC90bXAvcHV5YS00ZDgyZmE3Yy04ZmQ5LTRkZGUtYmNjNC1mYmE0YzNlOTIyZTktMHZuMVVCL2NvbnRyYWN0LmFsZ28udHM6ODUtOTEKICAgIC8vIGl0eG4KICAgIC8vICAgLnBheW1lbnQoewogICAgLy8gICAgIHJlY2VpdmVyOiB0aGlzLm93bmVyLnZhbHVlLAogICAgLy8gICAgIGFtb3VudDogYW1vdW50VG9XaXRoZHJhdywKICAgIC8vICAgICBmZWU6IFVpbnQ2NCgwKSwKICAgIC8vICAgfSkKICAgIC8vICAgLnN1Ym1pdCgpCiAgICBpdHhuX3N1Ym1pdAogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo4CiAgICAvLyB0b3RhbEVhcm5lZCA9IEdsb2JhbFN0YXRlPHVpbnQ2ND4oeyBrZXk6ICd0ZScgfSkKICAgIGJ5dGVjXzAgLy8gInRlIgogICAgLy8gL3RtcC9wdXlhLTRkODJmYTdjLThmZDktNGRkZS1iY2M0LWZiYTRjM2U5MjJlOS0wdm4xVUIvY29udHJhY3QuYWxnby50czo5NAogICAgLy8gdGhpcy50b3RhbEVhcm5lZC52YWx1ZSA9IFVpbnQ2NCgwKQogICAgaW50Y18wIC8vIDAKICAgIGFwcF9nbG9iYWxfcHV0CiAgICAvLyAvdG1wL3B1eWEtNGQ4MmZhN2MtOGZkOS00ZGRlLWJjYzQtZmJhNGMzZTkyMmU5LTB2bjFVQi9jb250cmFjdC5hbGdvLnRzOjc0CiAgICAvLyBAYWJpbWV0aG9kKCkKICAgIGludGNfMSAvLyAxCiAgICByZXR1cm4K",
+          "clear": "I3ByYWdtYSB2ZXJzaW9uIDExCiNwcmFnbWEgdHlwZXRyYWNrIGZhbHNlCgovLyBAYWxnb3JhbmRmb3VuZGF0aW9uL2FsZ29yYW5kLXR5cGVzY3JpcHQvYmFzZS1jb250cmFjdC5kLnRzOjpCYXNlQ29udHJhY3QuY2xlYXJTdGF0ZVByb2dyYW0oKSAtPiB1aW50NjQ6Cm1haW46CiAgICBwdXNoaW50IDEgLy8gMQogICAgcmV0dXJuCg=="
+        },
+        "state": {
+          "global": {
+            "num_byte_slices": 1,
+            "num_uints": 3
+          },
+          "local": {
+            "num_byte_slices": 0,
+            "num_uints": 0
+          }
+        },
+        "schema": {
+          "global": {
+            "declared": {
+              "owner": {
+                "type": "bytes",
+                "key": "o"
+              },
+              "pricePerCall": {
+                "type": "uint64",
+                "key": "p"
+              },
+              "totalCalls": {
+                "type": "uint64",
+                "key": "tc"
+              },
+              "totalEarned": {
+                "type": "uint64",
+                "key": "te"
+              }
+            },
+            "reserved": {}
+          },
+          "local": {
+            "declared": {},
+            "reserved": {}
+          }
+        },
+        "contract": {
+          "name": "JokePayPerCall",
+          "methods": [
+            {
+              "name": "createApplication",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "createApplication\nLifecycle method called on contract creation.\nInitializes the service owner and default pricing."
+            },
+            {
+              "name": "record_payment",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "record_payment\nTrustless on-chain verification for x402 payments.\nExpects an atomic group where:\ngtxn[0]: PaymentTxn (ALGO from user to contract)\ngtxn[1]: AppCall (this method)"
+            },
+            {
+              "name": "set_price",
+              "args": [
+                {
+                  "type": "uint64",
+                  "name": "newPrice"
+                }
+              ],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "set_price\nAllows the owner to update the microALGO cost per joke."
+            },
+            {
+              "name": "get_stats",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "uint64"
+              },
+              "desc": "get_stats\nReturns the total number of jokes served."
+            },
+            {
+              "name": "withdraw",
+              "args": [],
+              "readonly": false,
+              "returns": {
+                "type": "void"
+              },
+              "desc": "withdraw\nAllows the owner to claim accumulated ALGO from the contract."
+            }
+          ],
+          "networks": {}
+        },
+        "bare_call_config": {}
+      },
+      "contract_code": "import { Contract, GlobalState, abimethod, uint64, bytes, Txn, Global, Uint64, Bytes, assert, Account, itxn, gtxn, clone } from '@algorandfoundation/algorand-typescript'\n\nexport class JokePayPerCall extends Contract {\n  // Service configuration and accounting\n  owner = GlobalState<Account>({ key: 'o' })\n  pricePerCall = GlobalState<uint64>({ key: 'p' })\n  totalCalls = GlobalState<uint64>({ key: 'tc' })\n  totalEarned = GlobalState<uint64>({ key: 'te' })\n\n  /**\n   * createApplication\n   * Lifecycle method called on contract creation.\n   * Initializes the service owner and default pricing.\n   */\n  public createApplication(): void {\n    this.owner.value = Txn.sender\n    this.totalCalls.value = Uint64(0)\n    this.totalEarned.value = Uint64(0)\n    // Default price: 0.005 ALGO = 5000 microALGOs\n    this.pricePerCall.value = Uint64(5000)\n  }\n\n  /**\n   * record_payment\n   * Trustless on-chain verification for x402 payments.\n   * Expects an atomic group where:\n   * gtxn[0]: PaymentTxn (ALGO from user to contract)\n   * gtxn[1]: AppCall (this method)\n   */\n  @abimethod()\n  public record_payment(): void {\n    // 1. Access the payment transaction at the start of the group\n    const payment = gtxn.PaymentTxn(Uint64(0))\n\n    // 2. Security: Verify the payment is actually sent to this contract\n    assert(\n      payment.receiver === Global.currentApplicationAddress,\n      'Payment must be sent to the contract address'\n    )\n\n    // 3. Security: Verify the amount covers the current price\n    const paidAmount: uint64 = payment.amount\n    assert(paidAmount >= this.pricePerCall.value, 'Insufficient payment amount')\n\n    // 4. Accounting: Update global state\n    this.totalCalls.value = this.totalCalls.value + Uint64(1)\n    this.totalEarned.value = this.totalEarned.value + paidAmount\n  }\n\n  /**\n   * set_price\n   * Allows the owner to update the microALGO cost per joke.\n   */\n  @abimethod()\n  public set_price(newPrice: uint64): void {\n    assert(Txn.sender === this.owner.value, 'Only owner can update price')\n    this.pricePerCall.value = newPrice\n  }\n\n  /**\n   * get_stats\n   * Returns the total number of jokes served.\n   */\n  @abimethod()\n  public get_stats(): uint64 {\n    const calls: uint64 = this.totalCalls.value\n    return calls\n  }\n\n  /**\n   * withdraw\n   * Allows the owner to claim accumulated ALGO from the contract.\n   */\n  @abimethod()\n  public withdraw(): void {\n    // 1. Authorization check\n    assert(Txn.sender === this.owner.value, 'Only owner can withdraw')\n\n    // 2. Balance check\n    const amountToWithdraw: uint64 = this.totalEarned.value\n    assert(amountToWithdraw > Uint64(0), 'No funds available for withdrawal')\n\n    // 3. Perform inner transaction to send ALGO to owner\n    // Fee is set to 0 to utilize fee pooling from the caller\n    itxn\n      .payment({\n        receiver: this.owner.value,\n        amount: amountToWithdraw,\n        fee: Uint64(0),\n      })\n      .submit()\n\n    // 4. Reset earnings counter\n    this.totalEarned.value = Uint64(0)\n  }\n}",
+      "contract_filename": "jokepaypercall",
+      "framework": "puyats"
+    }
+  ]
+}

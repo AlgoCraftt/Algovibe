@@ -10,8 +10,13 @@ Usage:
     python test_pipeline.py
     python test_pipeline.py "Build a voting app"
     python test_pipeline.py --x402
-    python test_pipeline.py --x402 --key sk-or-... --model google/gemini-2.5-flash-preview
+    python test_pipeline.py --aicredits --key sk-your-key --model gemini-3-flash-preview
+    python test_pipeline.py --key sk-or-... --model google/gemini-2.5-flash-preview
     python test_pipeline.py --url http://localhost:8000
+
+Providers:
+    --aicredits    Use AICredits (OpenAI-compatible at https://api.aicredits.in/v1)
+    (default)      Use OpenRouter
 
 Requirements:
     - Backend already running (default: http://localhost:8000)
@@ -117,11 +122,12 @@ def stream_sse(url, body, headers):
 # ============================================================================
 # Main test
 # ============================================================================
-def run_test(prompt, framework, network, api_key, model, backend_url):
+def run_test(prompt, framework, network, api_key, model, backend_url, provider="openrouter"):
     banner("ALGOVIBE PIPELINE TEST", C.BOLD + C.GREEN)
     print(f"{C.BOLD}Prompt:{C.END}     {prompt}")
     print(f"{C.BOLD}Framework:{C.END}  {framework}")
     print(f"{C.BOLD}Network:{C.END}    {network}")
+    print(f"{C.BOLD}Provider:{C.END}   {provider}")
     print(f"{C.BOLD}Model:{C.END}      {model}")
     print(f"{C.BOLD}Backend:{C.END}    {backend_url}")
     print(f"{C.BOLD}Time:{C.END}       {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -154,7 +160,7 @@ def run_test(prompt, framework, network, api_key, model, backend_url):
 
     # BYOK headers — pass API key and model to override server defaults
     if api_key:
-        headers["X-LLM-Provider"] = "openrouter"
+        headers["X-LLM-Provider"] = provider
         headers["X-LLM-Api-Key"] = api_key
     if model:
         headers["X-LLM-Model"] = model
@@ -378,7 +384,9 @@ def main():
     parser.add_argument("--framework", "-f", default="puyats", choices=["puyats", "puyapy"])
     parser.add_argument("--network", "-n", default="testnet")
     parser.add_argument("--x402", action="store_true", help="Use default x402 test prompt")
-    parser.add_argument("--key", "-k", default="", help="OpenRouter API key")
+    parser.add_argument("--aicredits", action="store_true", help="Use AICredits provider (OpenAI-compatible)")
+    parser.add_argument("--openrouter", action="store_true", help="Use OpenRouter provider")
+    parser.add_argument("--key", "-k", default="", help="API key (OpenRouter or AICredits)")
     parser.add_argument("--model", "-m", default="", help="Model name (e.g. google/gemini-2.5-flash-preview)")
     parser.add_argument("--url", "-u", default="http://localhost:8000", help="Backend URL")
 
@@ -387,12 +395,25 @@ def main():
     # ── Interactive config ─────────────────────────────────────────────────
     api_key = args.key
     model = args.model
+    # Default to aicredits unless --openrouter is specified
+    if args.openrouter:
+        provider = "openrouter"
+    elif args.aicredits:
+        provider = "aicredits"
+    else:
+        provider = "aicredits"  # default
 
     if not api_key:
-        # Check env
-        env_key = os.environ.get("OPENROUTER_API_KEY", "")
+        # Check env for the selected provider
+        if provider == "aicredits":
+            env_key = os.environ.get("AICREDITS_API_KEY", "")
+            env_label = "AICREDITS_API_KEY"
+        else:
+            env_key = os.environ.get("OPENROUTER_API_KEY", "")
+            env_label = "OPENROUTER_API_KEY"
+
         if env_key:
-            print(f"{C.DIM}Found OPENROUTER_API_KEY in environment.{C.END}")
+            print(f"{C.DIM}Found {env_label} in environment.{C.END}")
             try:
                 use_env = input(f"Use existing key ({env_key[:8]}...)? [Y/n]: ").strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -401,8 +422,12 @@ def main():
                 api_key = env_key
 
         if not api_key:
-            print(f"\n{C.BOLD}OpenRouter API Key{C.END}")
-            print(f"  Get one at: https://openrouter.ai/keys")
+            if provider == "aicredits":
+                print(f"\n{C.BOLD}AICredits API Key{C.END}")
+                print(f"  Get one at: https://aicredits.in")
+            else:
+                print(f"\n{C.BOLD}OpenRouter API Key{C.END}")
+                print(f"  Get one at: https://openrouter.ai/keys")
             try:
                 api_key = input(f"  Enter key: ").strip()
             except (EOFError, KeyboardInterrupt):
@@ -411,29 +436,53 @@ def main():
                 print(f"{C.YELLOW}No key provided — will use server's default config.{C.END}")
 
     if not model:
-        print(f"\n{C.BOLD}Model Selection{C.END}")
-        print(f"  1. google/gemini-2.5-flash-preview    (fast, cheap)")
-        print(f"  2. google/gemini-2.5-pro-preview      (best quality)")
-        print(f"  3. anthropic/claude-sonnet-4           (strong coding)")
-        print(f"  4. deepseek/deepseek-chat-v3-0324     (good value)")
-        print(f"  5. openai/gpt-4.1-mini                (balanced)")
-        
-        env_model = os.environ.get("OPENROUTER_MODEL", "")
-        default_model = env_model or "google/gemini-2.5-flash-preview"
-        
-        try:
-            model_input = input(f"  Choice or model name [{default_model}]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            model_input = ""
-        
-        model_map = {
-            "1": "google/gemini-2.5-flash-preview",
-            "2": "google/gemini-2.5-pro-preview",
-            "3": "anthropic/claude-sonnet-4",
-            "4": "deepseek/deepseek-chat-v3-0324",
-            "5": "openai/gpt-4.1-mini",
-        }
-        
+        if provider == "aicredits":
+            print(f"\n{C.BOLD}Model Selection (AICredits){C.END}")
+            print(f"  1. gemini-3-flash-preview             (fast, cheap)")
+            print(f"  2. gemini-2.5-flash-preview           (balanced)")
+            print(f"  3. gemini-2.5-pro-preview             (best quality)")
+            print(f"  4. gpt-4.1-mini                       (OpenAI)")
+            print(f"  5. claude-sonnet-4                    (Anthropic)")
+
+            env_model = os.environ.get("AICREDITS_MODEL", "")
+            default_model = env_model or "gemini-3-flash-preview"
+
+            try:
+                model_input = input(f"  Choice or model name [{default_model}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                model_input = ""
+
+            model_map = {
+                "1": "gemini-3-flash-preview",
+                "2": "gemini-2.5-flash-preview",
+                "3": "gemini-2.5-pro-preview",
+                "4": "gpt-4.1-mini",
+                "5": "claude-sonnet-4",
+            }
+        else:
+            print(f"\n{C.BOLD}Model Selection (OpenRouter){C.END}")
+            print(f"  1. google/gemini-2.5-flash-preview    (fast, cheap)")
+            print(f"  2. google/gemini-2.5-pro-preview      (best quality)")
+            print(f"  3. anthropic/claude-sonnet-4           (strong coding)")
+            print(f"  4. deepseek/deepseek-chat-v3-0324     (good value)")
+            print(f"  5. openai/gpt-4.1-mini                (balanced)")
+
+            env_model = os.environ.get("OPENROUTER_MODEL", "")
+            default_model = env_model or "google/gemini-2.5-flash-preview"
+
+            try:
+                model_input = input(f"  Choice or model name [{default_model}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                model_input = ""
+
+            model_map = {
+                "1": "google/gemini-2.5-flash-preview",
+                "2": "google/gemini-2.5-pro-preview",
+                "3": "anthropic/claude-sonnet-4",
+                "4": "deepseek/deepseek-chat-v3-0324",
+                "5": "openai/gpt-4.1-mini",
+            }
+
         if model_input in model_map:
             model = model_map[model_input]
         elif model_input:
@@ -441,11 +490,11 @@ def main():
         else:
             model = default_model
 
-    print(f"\n{C.GREEN}Using model: {model}{C.END}")
+    print(f"\n{C.GREEN}Using provider: {provider} | model: {model}{C.END}")
 
     # ── Prompt ─────────────────────────────────────────────────────────────
     if args.x402:
-        prompt = "Build a pay-per-call weather API that charges 0.01 USDC per request using x402 on Algorand testnet"
+        prompt = "Build a pay-per-call weather API that charges 0.01 ALGO per request using x402 on Algorand testnet"
     elif args.prompt:
         prompt = args.prompt
     else:
@@ -457,11 +506,11 @@ def main():
         if user_prompt:
             prompt = user_prompt
         else:
-            prompt = "Build a pay-per-call joke API that charges 0.005 USDC per request using x402"
+            prompt = "Build a pay-per-call joke API that charges 0.005 ALGO per request using x402"
             print(f"  {C.DIM}Using: {prompt}{C.END}")
 
     # Run
-    run_test(prompt, args.framework, args.network, api_key, model, args.url)
+    run_test(prompt, args.framework, args.network, api_key, model, args.url, provider)
 
 
 if __name__ == "__main__":
