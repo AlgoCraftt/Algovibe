@@ -14,7 +14,8 @@ export type BridgeMessageType =
   | 'OPT_IN'            // Request app opt-in
   | 'GET_NETWORK'       // Request current network info
   | 'SIGN_TRANSACTION'  // Request raw transaction signing
-  | 'SIGN_X402_PAYMENT'; // Sign an x402 payment for HTTP 402 flow
+  | 'SIGN_X402_PAYMENT' // Sign an x402 payment for HTTP 402 flow
+  | 'X402_FETCH';       // Full x402 round trip (parent does fetch→402→sign→retry)
 
 export interface BridgeRequest {
   id: string;          // Unique request ID
@@ -58,4 +59,15 @@ export interface SignX402PaymentPayload {
   paymentRequirements: any;
   /** The resource URL the client is trying to access */
   resourceUrl: string;
+}
+
+export interface X402FetchPayload {
+  /** The x402 server URL to fetch (the paid endpoint) */
+  url: string;
+  /** Optional fetch options (method, body, etc.) */
+  options?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  };
 }

@@ -25,6 +25,7 @@ export const PROVIDER_LABELS: Record<LlmProvider, string> = {
 export const MODELS_BY_PROVIDER: Record<LlmProvider, LlmModelOption[]> = {
   openrouter: [
     { id: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash (preview)' },
+    { id: 'google/gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
     { id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (preview)' },
     { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
     { id: 'moonshotai/kimi-k2.6', label: 'Kimi K2.6' },

@@ -123,6 +123,10 @@ export function BridgeHandler() {
             handleSignX402Payment(event.source, data)
             break
           }
+          if (data.type === 'X402_FETCH') {
+            handleX402Fetch(event.source, data)
+            break
+          }
           sendResponse(event.source, data.id, null, `Unsupported request type: ${data.type}`)
       }
     }
@@ -272,6 +276,55 @@ export function BridgeHandler() {
     } catch (err: any) {
       console.error('[BridgeHandler] x402 payment signing failed:', err)
       sendResponse(source, request.id, null, `x402 payment signing failed: ${err.message}`)
+    }
+  }
+
+  /**
+   * Handle the FULL x402 round trip by calling the backend x402-proxy endpoint.
+   * The backend uses @x402/fetch + a funded hot wallet for spec-compliant payment.
+   */
+  const handleX402Fetch = async (source: MessageEventSource, request: BridgeRequest) => {
+    const { url, options } = request.payload || {}
+
+    if (!url) {
+      sendResponse(source, request.id, null, 'Missing url in X402_FETCH request')
+      return
+    }
+
+    try {
+      console.log('[BridgeHandler] x402 proxy request ->', url)
+
+      const backendUrl = (window.location.origin.includes('localhost')
+        ? 'http://localhost:8000'
+        : '') + '/api/v1/x402-proxy'
+
+      const resp = await fetch(backendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, method: options?.method || 'GET' }),
+      })
+
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '')
+        sendResponse(source, request.id, null, `x402 proxy error (${resp.status}): ${errText.slice(0, 300)}`)
+        return
+      }
+
+      const result = await resp.json()
+
+      if (result.success) {
+        sendResponse(source, request.id, {
+          data: result.data,
+          paid: true,
+          receipt: result.receipt || { protocol: 'x402', status: 'settled' },
+          mode: 'x402-http',
+        })
+      } else {
+        sendResponse(source, request.id, null, result.error || result.detail || 'x402 proxy returned failure')
+      }
+    } catch (err: any) {
+      console.error('[BridgeHandler] x402 proxy call failed:', err)
+      sendResponse(source, request.id, null, `x402 proxy failed: ${err.message}`)
     }
   }
 

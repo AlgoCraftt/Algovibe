@@ -80,12 +80,12 @@ app.use(
         accepts: [
           {
             scheme: 'exact',
-            price: '0.01',
+            price: '$0.01',
             network: ALGORAND_TESTNET_CAIP2,
             payTo: avmAddress,
           },
         ],
-        description: 'Premium API data — 0.01 ALGO per call via x402',
+        description: 'Premium API data — $0.01 USDC per call via x402',
       },
     },
     resourceServer,
@@ -108,7 +108,7 @@ app.get('/api/data', (c) => {
       protocol: 'x402',
       version: '2.11.0',
       network: 'Algorand TestNet',
-      price: '0.01 ALGO',
+      price: '$0.01 USDC',
       facilitator: facilitatorUrl,
     },
   });
@@ -133,7 +133,7 @@ app.get('/', (c) => {
     protocol: 'x402',
     version: '2.11.0',
     endpoints: {
-      paid: 'GET /api/data (0.01 ALGO per call)',
+      paid: 'GET /api/data ($0.01 USDC per call)',
       free: ['GET /health', 'GET /'],
     },
     payTo: avmAddress,
@@ -150,11 +150,11 @@ serve({ fetch: app.fetch, port }, () => {
   console.log('  │  AlgoVibe x402 Server (Algorand TestNet)         │');
   console.log('  ├─────────────────────────────────────────────────┤');
   console.log(`  │  URL:         http://localhost:${port}             │`);
-  console.log('  │  Paid API:    GET /api/data (0.01 ALGO)        │');
+  console.log('  │  Paid API:    GET /api/data ($0.01 USDC)       │');
   console.log(`  │  Pay-to:      ${avmAddress.slice(0, 12)}...               │`);
   console.log(`  │  Facilitator: ${facilitatorUrl}  │`);
   console.log('  │  Network:     Algorand TestNet (CAIP-2)          │');
-  console.log('  │  Asset:       Native ALGO                        │');
+  console.log('  │  Asset:       USDC (TestNet ASA 10458941)       │');
   console.log('  └─────────────────────────────────────────────────┘');
   console.log('');
   console.log('  Test:');

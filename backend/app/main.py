@@ -11,6 +11,7 @@ from app.api.routes import generate
 from app.api.routes import protocols
 from app.api.routes import publish
 from app.api.routes import llm
+from app.api.routes import x402_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ app.include_router(generate.router, prefix="/api/v1", tags=["generate"])
 app.include_router(protocols.router, prefix="/api/v1", tags=["protocols"])
 app.include_router(publish.router, prefix="/api/v1", tags=["publish"])
 app.include_router(llm.router, prefix="/api/v1", tags=["llm"])
+app.include_router(x402_proxy.router, prefix="/api/v1", tags=["x402"])
 
 
 @app.get("/")

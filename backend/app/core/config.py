@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     simulate_enabled: bool = True
     algorand_simulator_mnemonic: str = ""
 
+    # x402 hot wallet (funded TestNet account for x402 demo payments)
+    x402_mnemonic: str = ""
+
     # Supported frameworks (PuyaPy + PuyaTs are primary; TealScript is legacy/migration only)
     supported_frameworks: list[str] = ["puyapy", "puyats", "tealscript"]
 

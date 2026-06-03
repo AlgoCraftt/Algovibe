@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .env
+_x402_run_*.ts
+_test_payload.json

@@ -201,20 +201,21 @@ const HOOK_PATHS = [
  *   fetch(serverUrl) → 402 → SIGN_X402_PAYMENT via bridge → retry with X-PAYMENT → real response
  */
 function buildPreviewX402ClientHook(serverUrl: string): string {
-  return `// [AlgoVibe Preview] x402 client — real HTTP 402 flow against configured server
+  return `// [AlgoVibe Preview] x402 client — delegates the full round trip to the parent window.
+// The iframe runs on a public origin (codesandbox.io) which the browser blocks
+// from reaching localhost. The parent window does fetch → 402 → sign → retry.
 import { useState, useCallback } from 'react';
 import { useAlgorand } from './useAlgorand';
-import { APP_ID } from './useContract';
 
 const X402_SERVER_URL = ${JSON.stringify(serverUrl)};
 
-function signX402Payment(paymentRequirements: any, resourceUrl: string): Promise<any> {
+function x402Fetch(url: string, options?: any): Promise<any> {
   return new Promise((resolve, reject) => {
-    const id = 'x402_' + Math.random().toString(36).slice(2);
+    const id = 'x402fetch_' + Math.random().toString(36).slice(2);
     const timeout = setTimeout(() => {
       window.removeEventListener('message', handler);
-      reject(new Error('x402 payment signing timed out — is your wallet connected?'));
-    }, 60000);
+      reject(new Error('x402 request timed out — is your wallet connected and the server running?'));
+    }, 90000);
     const handler = (e: MessageEvent) => {
       if (e.data?.id === id && e.data?.type === 'ALGOCRAFT_RESPONSE') {
         clearTimeout(timeout);
@@ -224,7 +225,7 @@ function signX402Payment(paymentRequirements: any, resourceUrl: string): Promise
       }
     };
     window.addEventListener('message', handler);
-    window.parent.postMessage({ id, type: 'SIGN_X402_PAYMENT', payload: { paymentRequirements, resourceUrl } }, '*');
+    window.parent.postMessage({ id, type: 'X402_FETCH', payload: { url, options } }, '*');
   });
 }
 
@@ -241,74 +242,22 @@ export const useX402Client = () => {
       throw new Error('Wallet not connected');
     }
 
-    // Always use the configured x402 server URL (ignore any URL the UI passes)
-    const url = X402_SERVER_URL;
-    console.log('[x402] Calling configured server:', url);
-
+    console.log('[x402] Requesting parent to fetch:', X402_SERVER_URL);
     setPaying(true);
     setError(null);
     setLastResponse(null);
 
     try {
-      // Step 1: Fetch — expect 402
-      const initialResp = await fetch(url, {
-        ...options,
-        headers: { ...((options?.headers as any) || {}), 'Accept': 'application/json' },
+      // Delegate the entire x402 round trip to the parent window (bridge)
+      const result: any = await x402Fetch(X402_SERVER_URL, {
+        method: (options as any)?.method,
+        headers: (options as any)?.headers,
+        body: (options as any)?.body,
       });
 
-      if (initialResp.status === 402) {
-        // Step 2: Parse payment requirements
-        const header = initialResp.headers.get('PAYMENT-REQUIRED') || initialResp.headers.get('payment-required');
-        let paymentRequirements: any;
-        if (header) {
-          try { paymentRequirements = JSON.parse(header); }
-          catch { const b = await initialResp.json().catch(() => null); paymentRequirements = b?.paymentRequirements || b?.accepts?.[0] || b; }
-        } else {
-          const b = await initialResp.json().catch(() => null);
-          paymentRequirements = b?.paymentRequirements || b?.accepts?.[0] || b;
-        }
-        if (!paymentRequirements) throw new Error('Server returned 402 but no payment requirements found');
-
-        const reqs = Array.isArray(paymentRequirements) ? paymentRequirements : [paymentRequirements];
-        const algoReq = reqs.find((r: any) => String(r.network || '').includes('algorand')) || reqs[0];
-
-        // Step 3: Sign via bridge
-        const signResult = await signX402Payment(algoReq, url);
-
-        // Step 4: Retry with X-PAYMENT
-        const retryResp = await fetch(url, {
-          ...options,
-          headers: {
-            ...((options?.headers as any) || {}),
-            'Accept': 'application/json',
-            'X-PAYMENT': signResult.signedPayment || signResult.txnBytes,
-          },
-        });
-        if (!retryResp.ok) {
-          const t = await retryResp.text().catch(() => '');
-          throw new Error('x402 retry failed (' + retryResp.status + '): ' + t.slice(0, 200));
-        }
-        const data = await retryResp.json();
-        const receipt = {
-          txId: signResult.txId || 'verified',
-          amount: algoReq.price || '',
-          timestamp: Date.now(),
-          network: algoReq.network || 'algorand-testnet',
-          protocol: 'x402',
-        };
-        setLastReceipt(receipt);
-        setLastResponse(data);
-        return { data, paid: true, receipt, mode: 'x402-http' };
-      }
-
-      if (initialResp.ok) {
-        const data = await initialResp.json();
-        setLastResponse(data);
-        return { data, paid: false, mode: 'x402-http' };
-      }
-
-      const errText = await initialResp.text().catch(() => '');
-      throw new Error('Server returned ' + initialResp.status + ': ' + errText.slice(0, 200));
+      if (result?.receipt) setLastReceipt(result.receipt);
+      if (result?.data) setLastResponse(result.data);
+      return result;
     } catch (err: any) {
       setError(err.message);
       throw err;
