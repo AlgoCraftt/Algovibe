@@ -109,6 +109,20 @@ API RULES:
 - Import and use `useAlgorand()` from `./hooks/useAlgorand` for wallet address
 - CRITICAL — METHOD NAMES: The `useContract()` hook exports methods in camelCase. You MUST use the camelCase version of every method name. Examples: `set_frozen` → `setFrozen`, `transfer_nft` → `transferNft`, `get_balance` → `getBalance`. NEVER use snake_case method names from the contract spec directly — always convert them to camelCase when calling from `useContract()`.
 - Call `readState()` after every successful transaction to refresh stats
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WIRING COMPLETENESS — MANDATORY:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Every non-lifecycle method exported by useContract() MUST be called somewhere in App.tsx.
+- Destructure ALL methods from useContract() — don't skip any.
+- Create a dedicated UI card / button for EACH method, even if it's owner-only or read-only.
+- For owner-only methods (withdraw, set_price, etc.): show them in an "Owner Panel" section that is
+  only visible when `activeAddress === contractState.owner` (or similar owner check).
+- For read-only / getter methods (get_stats, get_balance, etc.): call them to display specific data,
+  OR if readState() already returns the same data, still wire the getter as a "Refresh" button.
+- NO dead hooks. If useContract exports it, your App.tsx must call it.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 - CRITICAL — GLOBAL STATE KEYS: readState() returns on-chain keys AND ARC-32 schema aliases (e.g. both `td` and `total_donations` if declared in schema). Prefer keys from contract spec `global_state` / ARC-32 `schema.global.declared` — use the `key` field from schema, not invented names.
 - CRITICAL — PAY METHODS: Methods with a `pay` argument (e.g. donate(pay)) are called via useContract with a microAlgo amount — NEVER pass payment as an ABI arg. Example: `donate(amountMicroAlgos)` not `donate(paymentTxn)`.
 - Load global stats on mount even before wallet connects: call `readState()` in useEffect on mount without requiring activeAddress; only gate opt-in / local actions on wallet.
@@ -178,6 +192,9 @@ CONTRACT SPECIFICATION:
 UI REQUIREMENTS:
 {ui_requirements}
 
+AVAILABLE HOOK METHODS (from useContract — you MUST call ALL of these):
+{hook_methods_list}
+
 SDK CONTEXT (for ABI hints):
 {docs_context}
 
@@ -185,11 +202,85 @@ CRITICAL — DEPLOYED APP ID: The contract is deployed at APP_ID = {app_id}.
 You MUST NOT hardcode any other number. The useContract hook already exports APP_ID = {app_id}.
 Import it: import {{ useContract, APP_ID }} from './hooks/useContract';
 
+WIRING CHECKLIST — verify before outputting:
+- [ ] Every method listed in AVAILABLE HOOK METHODS is destructured from useContract()
+- [ ] Every method has a corresponding async handler function
+- [ ] Every method has a UI element (button/card) that calls its handler
+- [ ] Owner-only methods are gated behind `activeAddress === contractState.owner`
+- [ ] readState() is called on mount AND after every successful transaction
+
 Output THE COMPLETE App.tsx (start with // UI STRATEGY):"""
 
 FIX_CODE_SYSTEM_PROMPT = """You are a React code fixer. Output the ENTIRE fixed code. No explanation."""
 
 MAX_RETRIES = 2
+
+
+def _camel_case(s: str) -> str:
+    """Convert snake_case to camelCase."""
+    parts = s.split('_')
+    return parts[0] + ''.join(word.capitalize() for word in parts[1:])
+
+
+LIFECYCLE_METHODS = {
+    "createApplication", "optInToApplication", "closeOutOfApplication",
+    "updateApplication", "deleteApplication",
+    "create_application", "opt_in", "opt_in_to_application",
+    "close_out", "close_out_of_application", "update_application", "delete_application"
+}
+
+
+def _build_hook_methods_list(arc32_spec: any, spec: dict) -> str:
+    """Build a human-readable list of hook methods the LLM must call in App.tsx."""
+    methods = []
+    if arc32_spec:
+        arc_methods = arc32_spec.get("contract", {}).get("methods", [])
+        for m in arc_methods:
+            name = m.get("name", "")
+            if not name or name in LIFECYCLE_METHODS:
+                continue
+            args = m.get("args", [])
+            returns = m.get("returns", {})
+            ret_type = returns.get("type", "void") if isinstance(returns, dict) else str(returns)
+            
+            camel_name = _camel_case(name)
+            arg_parts = []
+            has_payment = False
+            for a in args:
+                a_type = str(a.get("type", ""))
+                if a_type.lower() in ("pay", "payment"):
+                    has_payment = True
+                else:
+                    a_name = a.get("name", "arg")
+                    arg_parts.append(f"{a_name}: {a_type}")
+
+            sig = ", ".join(arg_parts)
+            pay_note = " [includes payment transaction]" if has_payment else ""
+            desc = m.get("desc", "")
+            first_line = desc.split("\n")[0][:60] if desc else ""
+            
+            methods.append(f"  - {camel_name}({sig}) → {ret_type}{pay_note}")
+            if first_line:
+                methods.append(f"    // {first_line}")
+    
+    if not methods:
+        # Fallback: use spec methods
+        spec_methods = spec.get("methods", [])
+        for m in spec_methods:
+            name = m.get("name", "")
+            if not name or name in LIFECYCLE_METHODS or name == "create":
+                continue
+            camel_name = _camel_case(name)
+            args = m.get("args", [])
+            arg_parts = [f"{a.get('name','arg')}: {a.get('type','any')}" for a in args
+                        if str(a.get("type", "")).lower() not in ("pay", "payment")]
+            sig = ", ".join(arg_parts)
+            ret = m.get("returns", "void")
+            methods.append(f"  - {camel_name}({sig}) → {ret}")
+
+    methods.append(f"  - readState() → object (global + local state)")
+    
+    return "\n".join(methods) if methods else "  (no methods found — check arc32_spec)"
 
 async def generate_react_frontend(
     template_type: str,
@@ -207,11 +298,15 @@ async def generate_react_frontend(
     if template_type == "x402_service" or spec.get("x402_integration"):
         system_prompt += X402_REACT_SUPPLEMENT
 
+    # Build hook methods list from ARC32 so the LLM knows exactly what to wire
+    hook_methods_list = _build_hook_methods_list(arc32_spec, spec)
+
     user_prompt = REACT_AGENT_USER_PROMPT.format(
         name=spec.get("name", "MyDApp"),
         description=spec.get("description", ""),
         spec_json=json.dumps(spec, indent=2),
         ui_requirements=", ".join(spec.get("ui_requirements", [])) if isinstance(spec.get("ui_requirements"), list) else spec.get("ui_requirements", "standard dashboard"),
+        hook_methods_list=hook_methods_list,
         docs_context="\n".join(docs_context[:5]) if docs_context else "No documentation context provided.",
         app_id=package_id
     )
@@ -401,6 +496,8 @@ This is an x402 pay-per-call service dApp. The UI must demonstrate the x402 paym
 4. SERVICE STATS: Show on-chain stats from the contract (total calls, total earned, price per call) using the normal useContract + readState pattern.
 
 5. OWNER PANEL: If activeAddress matches owner, show a "Withdraw Earnings" button.
+   ALSO add ALL other owner-only methods here (e.g. setPrice with an input field).
+   Every owner method from useContract MUST have a button in this panel.
 
 6. x402 FLOW EXPLANATION: Add a small info section explaining:
    "This API uses the x402 protocol: your wallet automatically pays [price] per request. Payment is settled on Algorand in seconds."
@@ -408,6 +505,10 @@ This is an x402 pay-per-call service dApp. The UI must demonstrate the x402 paym
 7. COLOR ACCENT for x402: Use a purple/violet accent (#8b5cf6) for x402-specific elements alongside the standard amber (#f59e0b) for contract interactions.
 
 8. The useX402Client hook provides: { payAndFetch, paying, lastReceipt, lastResponse, error }
+
+9. WIRING COMPLETENESS for x402: The x402 hook handles record_payment indirectly — you don't need a separate
+   UI button for recordPayment. But ALL other methods (setPrice, getStats, withdraw, etc.) MUST still have
+   direct UI calls. getStats() should be called to show live statistics (or use readState + a refresh button).
 
 STRUCTURE for x402 UI:
 - Top: Service name + x402 badge + price display

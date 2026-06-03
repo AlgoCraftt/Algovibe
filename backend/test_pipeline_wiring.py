@@ -115,14 +115,18 @@ def stream_sse(url, body, headers):
 def parse_contract_methods(contract_code: str) -> list:
     """Extract method signatures from PuyaTS/PuyaPy contract code."""
     methods = []
-    # PuyaTS: @abimethod() or public methodName(args): returnType
-    # Match: public methodName(...) or @abimethod decorated methods
-    pattern = r'(?:@abimethod\([^)]*\)\s*)?(?:public\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*(\w+))?'
-    for match in re.finditer(pattern, contract_code):
+    # PuyaTS: Match class methods that are public or decorated with @abimethod
+    # Pattern: optional decorator + public/private + methodName + (args) + : returnType
+    # Must start at line beginning (indented) with `public` keyword or @abimethod above
+    
+    # First try: find @abimethod decorated or public methods (stricter)
+    # Match lines like: `  public methodName(args): returnType {`
+    # or `  @abimethod()\n  public methodName(args): returnType {`
+    pattern = r'^\s*(?:@abimethod\([^)]*\)\s*\n\s*)?public\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*(\w+))?'
+    for match in re.finditer(pattern, contract_code, re.MULTILINE):
         name = match.group(1)
         args_str = match.group(2).strip()
         returns = match.group(3) or 'void'
-        # Skip constructor/lifecycle
         if name in ('constructor', '__init__', 'approval_program', 'clear_state_program'):
             continue
         args = []
@@ -130,11 +134,32 @@ def parse_contract_methods(contract_code: str) -> list:
             for arg in args_str.split(','):
                 arg = arg.strip()
                 if ':' in arg:
-                    parts = arg.split(':')
+                    parts = arg.split(':', 1)
                     args.append({'name': parts[0].strip(), 'type': parts[1].strip()})
                 elif arg:
                     args.append({'name': arg, 'type': 'unknown'})
         methods.append({'name': name, 'args': args, 'returns': returns})
+
+    # PuyaPy fallback: look for `@abimethod` or `def method_name(self, ...)`
+    if not methods:
+        py_pattern = r'^\s*(?:@abimethod[^\n]*\n\s*)?def\s+(\w+)\s*\(self(?:,\s*([^)]*))?\)\s*(?:->\s*(\w+))?'
+        for match in re.finditer(py_pattern, contract_code, re.MULTILINE):
+            name = match.group(1)
+            args_str = (match.group(2) or '').strip()
+            returns = match.group(3) or 'void'
+            if name.startswith('_') or name in ('approval_program', 'clear_state_program'):
+                continue
+            args = []
+            if args_str:
+                for arg in args_str.split(','):
+                    arg = arg.strip()
+                    if ':' in arg:
+                        parts = arg.split(':', 1)
+                        args.append({'name': parts[0].strip(), 'type': parts[1].strip()})
+                    elif arg:
+                        args.append({'name': arg, 'type': 'unknown'})
+            methods.append({'name': name, 'args': args, 'returns': returns})
+
     return methods
 
 
@@ -187,40 +212,74 @@ def parse_use_contract_hook(hook_code: str) -> dict:
 def parse_app_tsx_calls(app_code: str) -> dict:
     """Find all hook method calls in App.tsx."""
     calls = {}
+
+    def _parse_destructure(raw: str) -> list:
+        """Parse destructured names, handling aliases like `loading: contractLoading`."""
+        items = []
+        for part in raw.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            # Handle aliasing: `error: contractError` → original is 'error', local is 'contractError'
+            if ':' in part:
+                original, local = part.split(':', 1)
+                items.append({'original': original.strip(), 'local': local.strip()})
+            else:
+                items.append({'original': part, 'local': part})
+        return items
+
     # Find destructured imports from useContract
     destructure_match = re.search(r'const\s*\{([^}]+)\}\s*=\s*useContract\(\)', app_code)
-    hook_methods = []
+    hook_items = []
     if destructure_match:
-        hook_methods = [m.strip() for m in destructure_match.group(1).split(',')]
+        hook_items = _parse_destructure(destructure_match.group(1))
 
-    # Find all function calls that match hook methods
-    for method in hook_methods:
-        method = method.strip()
-        if not method:
+    # Find all function calls that match hook methods (use local name for searching)
+    for item in hook_items:
+        local_name = item['local']
+        original_name = item['original']
+        # Skip state-like properties (loading, error, success) — not callable methods
+        if original_name in ('loading', 'error', 'success'):
+            calls[original_name] = {
+                'call_count': 0,
+                'is_used': True,  # These are state values, always "used" via JSX
+                'is_state': True,
+                'local_alias': local_name,
+            }
             continue
-        # Count occurrences (calls)
-        # Pattern: method( or await method(
-        call_pattern = re.compile(rf'(?:await\s+)?{re.escape(method)}\s*\(')
+        # Count real function calls: localName( or await localName(
+        call_pattern = re.compile(rf'(?:await\s+)?{re.escape(local_name)}\s*\(')
         occurrences = call_pattern.findall(app_code)
-        # Subtract the destructuring itself
-        calls[method] = {
+        calls[original_name] = {
             'call_count': len(occurrences),
             'is_used': len(occurrences) > 0,
+            'is_state': False,
+            'local_alias': local_name,
         }
 
     # Also find useX402Client usage
     x402_match = re.search(r'const\s*\{([^}]+)\}\s*=\s*useX402Client\(\)', app_code)
     if x402_match:
-        x402_methods = [m.strip() for m in x402_match.group(1).split(',')]
-        for method in x402_methods:
-            method = method.strip()
-            if not method:
+        x402_items = _parse_destructure(x402_match.group(1))
+        for item in x402_items:
+            local_name = item['local']
+            original_name = item['original']
+            # Skip state props
+            if original_name in ('paying', 'lastReceipt', 'lastResponse', 'error'):
+                calls[f'x402:{original_name}'] = {
+                    'call_count': 0,
+                    'is_used': True,
+                    'is_state': True,
+                    'local_alias': local_name,
+                }
                 continue
-            call_pattern = re.compile(rf'(?:await\s+)?{re.escape(method)}\s*\(')
+            call_pattern = re.compile(rf'(?:await\s+)?{re.escape(local_name)}\s*\(')
             occurrences = call_pattern.findall(app_code)
-            calls[f'x402:{method}'] = {
+            calls[f'x402:{original_name}'] = {
                 'call_count': len(occurrences),
                 'is_used': len(occurrences) > 0,
+                'is_state': False,
+                'local_alias': local_name,
             }
 
     return calls
@@ -285,9 +344,17 @@ def analyze_wiring(contract_code: str, arc32_spec: dict, frontend_files: dict):
     else:
         app_calls = parse_app_tsx_calls(app_code)
         for method, info in app_calls.items():
-            status = f"{C.GREEN}✓ called{C.END}" if info['is_used'] else f"{C.YELLOW}⚠ imported but never called{C.END}"
+            if info.get('is_state'):
+                # State properties — just show as used
+                alias = info.get('local_alias', method)
+                alias_tag = f" (as {alias})" if alias != method else ""
+                print(f"  {C.BLUE}●{C.END} {method}{alias_tag} {C.DIM}[state]{C.END}")
+                continue
+            status = f"{C.GREEN}✓ called{C.END}" if info['is_used'] else f"{C.YELLOW}⚠ bound but not called{C.END}"
             count_str = f"({info['call_count']}x)" if info['call_count'] > 1 else ""
-            print(f"  {C.BLUE}●{C.END} {method} {count_str} {status}")
+            alias = info.get('local_alias', method)
+            alias_tag = f" (as {alias})" if alias != method else ""
+            print(f"  {C.BLUE}●{C.END} {method}{alias_tag} {count_str} {status}")
 
     # 4. x402 hook (if present)
     x402_hook = frontend_files.get("/hooks/useX402Client.ts", "")
@@ -313,17 +380,42 @@ def analyze_wiring(contract_code: str, arc32_spec: dict, frontend_files: dict):
     print(f"  {C.DIM}App.tsx → useContract() → callMethod() → Contract ABI{C.END}")
     print()
 
+    # Collect methods called indirectly through x402 hook
+    x402_hook = frontend_files.get("/hooks/useX402Client.ts", "")
+    x402_indirect_methods = set()
+    if x402_hook:
+        x402_indirect_methods = set(re.findall(r"callMethod\(\{[^}]*method:\s*['\"]([^'\"]+)['\"]", x402_hook))
+
+    # Check if x402 payAndFetch is actually used in the UI
+    x402_used_in_ui = 'x402:payAndFetch' in app_calls and app_calls['x402:payAndFetch'].get('is_used', False)
+
     # Build the mapping: UI call → hook method → contract method
     for hook_name, info in hook_bindings.items():
         if hook_name == 'readState':
             continue
         contract_method = info['contract_method']
-        called_in_ui = hook_name in app_calls and app_calls[hook_name]['is_used']
-        ui_status = f"{C.GREEN}✓{C.END}" if called_in_ui else f"{C.RED}✗{C.END}"
+        called_in_ui = hook_name in app_calls and app_calls[hook_name].get('is_used', False)
+        # Check if this method is called indirectly via x402
+        called_via_x402 = contract_method in x402_indirect_methods and x402_used_in_ui
+        
+        if called_in_ui:
+            ui_status = f"{C.GREEN}✓{C.END}"
+            route = f"UI → {C.BOLD}{hook_name}(){C.END}"
+        elif called_via_x402:
+            ui_status = f"{C.GREEN}✓{C.END}"
+            route = f"UI → x402 → {C.BOLD}{hook_name}(){C.END}"
+        else:
+            ui_status = f"{C.RED}✗{C.END}"
+            route = f"UI → {C.BOLD}{hook_name}(){C.END}"
+            
         in_abi = contract_method in callable_methods
         abi_status = f"{C.GREEN}✓{C.END}" if in_abi else f"{C.RED}✗{C.END}"
 
-        print(f"  {ui_status} UI → {C.BOLD}{hook_name}(){C.END} → {abi_status} contract.{contract_method}()")
+        print(f"  {ui_status} {route} → {abi_status} contract.{contract_method}()")
+
+    # Show x402 indirect path if applicable
+    if x402_indirect_methods and x402_used_in_ui:
+        print(f"\n  {C.MAGENTA}↳ x402 path:{C.END} App.tsx → useX402Client.payAndFetch() → callMethod('{', '.join(x402_indirect_methods)}') + payment")
 
     # 6. Mismatches
     section("6. WIRING ISSUES", C.RED)
@@ -336,16 +428,21 @@ def analyze_wiring(contract_code: str, arc32_spec: dict, frontend_files: dict):
         if method_name not in hook_contract_methods and camel not in hook_bindings:
             issues.append(f"{C.YELLOW}⚠{C.END}  Contract method '{method_name}' has no hook binding (not callable from UI)")
 
-    # Hook methods never called in UI
+    # Hook methods never called in UI (directly or indirectly via x402)
     for hook_name, info in hook_bindings.items():
         if hook_name in ('readState', 'loading', 'error', 'success'):
             continue
-        if hook_name not in app_calls or not app_calls[hook_name]['is_used']:
-            issues.append(f"{C.YELLOW}⚠{C.END}  Hook method '{hook_name}' is bound but never called in App.tsx")
+        contract_method = info['contract_method']
+        called_directly = hook_name in app_calls and app_calls[hook_name].get('is_used', False)
+        called_via_x402 = contract_method in x402_indirect_methods and x402_used_in_ui
+        if not called_directly and not called_via_x402:
+            issues.append(f"{C.YELLOW}⚠{C.END}  Hook method '{hook_name}' is bound but never called in App.tsx (directly or via x402)")
 
-    # UI calls to methods not in hook
-    for method_name in app_calls:
+    # UI calls to methods not in hook (skip state properties and x402 state)
+    for method_name, info in app_calls.items():
         if method_name.startswith('x402:'):
+            continue
+        if info.get('is_state'):
             continue
         if method_name in ('loading', 'error', 'success', 'readState'):
             continue
@@ -363,15 +460,24 @@ def analyze_wiring(contract_code: str, arc32_spec: dict, frontend_files: dict):
     banner("WIRING SUMMARY", C.BOLD + C.GREEN if not issues else C.BOLD + C.YELLOW)
     total_contract = len(callable_methods)
     total_hooked = len([h for h in hook_bindings if h != 'readState'])
-    total_called = len([m for m, info in app_calls.items()
-                       if info['is_used'] and m not in ('loading', 'error', 'success', 'readState')])
+    # Count methods reachable from UI (directly called or indirectly via x402)
+    total_called_direct = len([m for m, info in app_calls.items()
+                              if info.get('is_used') and not info.get('is_state')
+                              and m not in ('loading', 'error', 'success', 'readState')
+                              and not m.startswith('x402:')])
+    # Add x402 indirect calls
+    total_called_via_x402 = len([m for m in x402_indirect_methods if m in callable_methods]) if x402_used_in_ui else 0
+    total_reachable = total_called_direct + total_called_via_x402
 
     print(f"  Contract methods (callable): {total_contract}")
     print(f"  Hook bindings:               {total_hooked}")
-    print(f"  UI call sites:               {total_called}")
+    print(f"  Called from UI (direct):     {total_called_direct}")
+    if total_called_via_x402:
+        print(f"  Called via x402 (indirect):  {total_called_via_x402}")
+    print(f"  Total reachable from UI:     {total_reachable}")
     print(f"  Wiring issues:               {len(issues)}")
 
-    coverage = (total_called / total_contract * 100) if total_contract > 0 else 0
+    coverage = (total_reachable / total_contract * 100) if total_contract > 0 else 0
     color = C.GREEN if coverage >= 80 else C.YELLOW if coverage >= 50 else C.RED
     print(f"\n  {C.BOLD}UI Coverage:{C.END} {color}{coverage:.0f}%{C.END} of contract methods reachable from UI")
 
