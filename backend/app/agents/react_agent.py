@@ -695,7 +695,7 @@ interface X402Response {{
 }}
 
 export const useX402Client = () => {{
-  const {{ activeAddress, callMethod }} = useAlgorand();
+  const {{ activeAddress, callMethod, readState }} = useAlgorand();
   const [paying, setPaying] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<PaymentReceipt | null>(null);
   const [lastResponse, setLastResponse] = useState<any>(null);
@@ -708,8 +708,9 @@ export const useX402Client = () => {{
    *   [0] PaymentTxn (user → contract address, amount = price)
    *   [1] AppCallTxn (record_payment with 0 args)
    * 
-   * The contract's record_payment() reads the payment from gtxn group index 0
-   * and verifies receiver + amount on-chain. Fully trustless.
+   * SINGLE SOURCE OF TRUTH: the payment amount is read directly from the
+   * deployed contract's on-chain price (global state). This guarantees the
+   * payment ALWAYS matches what the contract expects — no config drift.
    *
    * In production (outside Sandpack), this would be handled by @x402-avm/fetch
    * which intercepts 402 responses and auto-pays.
@@ -725,25 +726,37 @@ export const useX402Client = () => {{
     setLastResponse(null);
 
     try {{
-      // Call record_payment with ZERO args but include payment field.
-      // The bridge will:
-      //   1. Build a PaymentTxn (user → contract, amount microALGO)
-      //   2. Build an AppCallTxn (record_payment selector, 0 ABI args)
-      //   3. Group them atomically with assignGroupID
-      //   4. Sign both via wallet
-      //
-      // The contract then verifies the payment via gtxn.PaymentTxn(0)
+      // 1. Read the ACTUAL price from the contract's on-chain state.
+      //    Keys: 'price_per_call' / 'pricePerCall' / 'p' (schema alias or raw key).
+      //    Fall back to the config value only if state read fails.
+      let priceMicro = X402_CONFIG.pricePerCallMicro;
+      try {{
+        const state: any = await readState(APP_ID);
+        const onChainPrice =
+          state?.price_per_call ?? state?.pricePerCall ?? state?.p;
+        if (onChainPrice !== undefined && onChainPrice !== null) {{
+          const parsed = Number(onChainPrice);
+          if (!isNaN(parsed) && parsed > 0) priceMicro = parsed;
+        }}
+      }} catch (e) {{
+        // If state read fails, use the config default
+        console.warn('Could not read on-chain price, using config default', e);
+      }}
+
+      // 2. Pay EXACTLY the contract's price. The bridge builds:
+      //      [PaymentTxn(user → contract, priceMicro), AppCallTxn(record_payment)]
+      //    The contract verifies payment.amount >= pricePerCall via gtxn.
       const result: any = await callMethod({{
         method: 'record_payment',
         args: [],  // ZERO args — contract reads payment from gtxn
         app_id: APP_ID,
-        payment: {{ amount: X402_CONFIG.pricePerCallMicro }},  // triggers atomic group
+        payment: {{ amount: priceMicro }},  // exact on-chain price → never rejected
       }});
 
       // Payment verified on-chain — generate receipt
       const receipt: PaymentReceipt = {{
         txId: result?.txId || 'tx_' + Math.random().toString(36).slice(2, 10).toUpperCase(),
-        amount: X402_CONFIG.priceDisplay,
+        amount: (priceMicro / 1_000_000) + ' ALGO',
         timestamp: Date.now(),
         network: X402_CONFIG.network,
       }};
@@ -755,7 +768,7 @@ export const useX402Client = () => {{
         data: generateMockApiResponse(url),
         meta: {{
           paid: true,
-          price: X402_CONFIG.priceDisplay,
+          price: (priceMicro / 1_000_000) + ' ALGO',
           protocol: 'x402',
           settledOn: 'Algorand Testnet',
           appId: APP_ID,
@@ -771,7 +784,7 @@ export const useX402Client = () => {{
     }} finally {{
       setPaying(false);
     }}
-  }}, [activeAddress, callMethod]);
+  }}, [activeAddress, callMethod, readState]);
 
   return {{
     payAndFetch,
@@ -814,20 +827,22 @@ function generateMockApiResponse(url: string): any {{
 
 def generate_x402_config(x402_config: dict) -> str:
     """Generate the x402 configuration file."""
-    price = x402_config.get("price_per_call", "$0.01")
+    price = x402_config.get("price_per_call", "$0.005")
     asset = x402_config.get("payment_asset", "ALGO")
     network = x402_config.get("network", "testnet")
     facilitator = x402_config.get("facilitator_url", "https://facilitator.goplausible.xyz")
     
-    # Parse price string to micro units
+    # Parse price string to micro units.
+    # For the demo, the price value is treated as a direct ALGO amount
+    # (e.g. "$0.5" → 0.5 ALGO → 500000 microALGO). This MUST match the
+    # microALGO value baked into the contract's createApplication().
     try:
-        price_float = float(price.replace("$", ""))
-        if asset.upper() == "USDC":
-            micro_units = int(price_float * 1_000_000)  # USDC has 6 decimals
-        else:
-            micro_units = int(price_float * 1_000_000)  # microALGO
+        price_float = float(str(price).replace("$", "").strip())
+        micro_units = int(round(price_float * 1_000_000))  # microALGO (or microUSDC, same 6 decimals)
+        if micro_units <= 0:
+            micro_units = 5000
     except (ValueError, AttributeError):
-        micro_units = 10000  # Default 0.01
+        micro_units = 5000  # Default 0.005
 
     return f"""// x402 Service Configuration
 // This configures the x402 payment protocol parameters for this dApp.

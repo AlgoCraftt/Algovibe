@@ -517,10 +517,27 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
 
     # ── Fix 4: Golden skeleton template ─────────────────────────────────────
 
-    def _get_contract_skeleton(self, contract_name: str, template_type: str = "") -> str:
+    @staticmethod
+    def _parse_price_to_micro(spec: dict) -> int:
+        """
+        Compute the microALGO price from the spec's x402_config.
+        Treats the dollar-style price string as a direct ALGO amount for the demo
+        (e.g. "$0.5" → 0.5 ALGO → 500000 microALGO).
+        """
+        cfg = spec.get("x402_config", {}) or {}
+        price_str = str(cfg.get("price_per_call", "0.005"))
+        try:
+            value = float(price_str.replace("$", "").strip())
+            micro = int(round(value * 1_000_000))
+            return micro if micro > 0 else 5000
+        except (ValueError, AttributeError):
+            return 5000
+
+    def _get_contract_skeleton(self, contract_name: str, template_type: str = "", price_micro: int = 5000) -> str:
         """
         Return a structural skeleton the LLM must follow.
         Uses x402-specific skeleton when template_type is x402_service.
+        price_micro: the exact microALGO price to bake into createApplication (from spec).
         """
         if self.framework == "puyats":
             safe_name = "".join(
@@ -552,7 +569,7 @@ export class {safe_name} extends Contract {{
 
   public createApplication(): void {{
     this.owner.value = Txn.sender
-    this.pricePerCall.value = Uint64(5000)  // 5000 microALGO = 0.005 ALGO
+    this.pricePerCall.value = Uint64({price_micro})  // {price_micro} microALGO — set from the requested price
     this.totalCalls.value = Uint64(0)
     this.totalEarned.value = Uint64(0)
   }}
@@ -749,7 +766,11 @@ class {safe_name}(ARC4Contract):
                     "and fix all issues. Output the COMPLETE corrected contract."
                 )
         else:
-            skeleton = self._get_contract_skeleton(contract_name, template_type=template_type)
+            # For x402 services, bake the exact requested price into the skeleton
+            price_micro = 5000
+            if template_type == "x402_service":
+                price_micro = self._parse_price_to_micro(spec)
+            skeleton = self._get_contract_skeleton(contract_name, template_type=template_type, price_micro=price_micro)
             prompt_parts.append(skeleton)
 
         prompt_parts.append("Generate the complete smart contract code now. Output ONLY the code, no explanation.")
