@@ -162,7 +162,9 @@ export function LlmSettingsModal({ open, onClose, onSaved }: LlmSettingsModalPro
                   ? 'sk-or-...'
                   : provider === 'openai'
                     ? 'sk-...'
-                    : 'sk-ant-...'
+                    : provider === 'aicredits'
+                      ? 'Your AI Credits API key'
+                      : 'sk-ant-...'
               }
               autoComplete="off"
               className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-nb-gold/40"

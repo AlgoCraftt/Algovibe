@@ -6,7 +6,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-LlmProvider = Literal["openrouter", "openai", "anthropic", "ollama"]
+LlmProvider = Literal["openrouter", "openai", "anthropic", "ollama", "aicredits"]
 
 _llm_config_var: ContextVar[Optional["LlmConfig"]] = ContextVar("llm_config", default=None)
 
@@ -35,11 +35,15 @@ def parse_provider(value: Optional[str]) -> Optional[LlmProvider]:
     if not value:
         return None
     normalized = value.strip().lower()
-    if normalized in ("openrouter", "openai", "anthropic", "claude", "ollama"):
+    if normalized in ("openrouter", "openai", "anthropic", "claude", "ollama", "aicredits"):
         if normalized == "claude":
             return "anthropic"
         return normalized  # type: ignore[return-value]
     return None
+
+
+# Fixed base URLs for providers that need them
+AICREDITS_BASE_URL = "https://api.aicredits.in/v1"
 
 
 def config_from_headers(
@@ -50,4 +54,5 @@ def config_from_headers(
     parsed = parse_provider(provider)
     if not parsed or not api_key or not api_key.strip() or not model or not model.strip():
         return None
-    return LlmConfig(provider=parsed, api_key=api_key.strip(), model=model.strip())
+    base_url = AICREDITS_BASE_URL if parsed == "aicredits" else None
+    return LlmConfig(provider=parsed, api_key=api_key.strip(), model=model.strip(), base_url=base_url)

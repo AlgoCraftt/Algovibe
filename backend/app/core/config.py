@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "anthropic/claude-3.5-sonnet"
 
+    # AI Credits (OpenAI-compatible provider at https://api.aicredits.in/v1)
+    aicredits_api_key: str = ""
+    aicredits_model: str = "gemini-3-flash-preview"
+    aicredits_base_url: str = "https://api.aicredits.in/v1"
+
     # Local OpenAI-compatible LLM (Ollama, LM Studio, vLLM)
     ollama_base_url: str = ""
     ollama_model: str = "llama3.2"

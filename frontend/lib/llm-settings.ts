@@ -1,4 +1,4 @@
-export type LlmProvider = 'openrouter' | 'openai' | 'anthropic'
+export type LlmProvider = 'openrouter' | 'openai' | 'anthropic' | 'aicredits'
 
 export interface LlmModelOption {
   id: string
@@ -19,6 +19,7 @@ export const PROVIDER_LABELS: Record<LlmProvider, string> = {
   openrouter: 'OpenRouter',
   openai: 'OpenAI',
   anthropic: 'Anthropic (Claude)',
+  aicredits: 'AI Credits',
 }
 
 export const MODELS_BY_PROVIDER: Record<LlmProvider, LlmModelOption[]> = {
@@ -41,12 +42,21 @@ export const MODELS_BY_PROVIDER: Record<LlmProvider, LlmModelOption[]> = {
     { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
     { id: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
   ],
+  aicredits: [
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (preview)' },
+    { id: 'gpt-4o', label: 'GPT-4o' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { id: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  ],
 }
 
 export const DEFAULT_MODEL: Record<LlmProvider, string> = {
   openrouter: 'google/gemini-3-flash-preview',
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-sonnet-20240620',
+  aicredits: 'gemini-3-flash-preview',
 }
 
 export function loadLlmSettings(): LlmSettings | null {

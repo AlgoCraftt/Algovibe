@@ -91,6 +91,16 @@ class LLMClient:
                 )
             )
 
+        if provider_override == "aicredits" or settings.aicredits_api_key:
+            return cls(
+                LlmConfig(
+                    provider="aicredits",
+                    api_key=settings.aicredits_api_key,
+                    model=settings.aicredits_model,
+                    base_url=settings.aicredits_base_url or "https://api.aicredits.in/v1",
+                )
+            )
+
         if settings.openrouter_api_key:
             return cls(
                 LlmConfig(
@@ -116,7 +126,7 @@ class LLMClient:
         if self._client is not None:
             return self._client
 
-        if self.provider in ("openrouter", "openai", "ollama"):
+        if self.provider in ("openrouter", "openai", "ollama", "aicredits"):
             if OpenAI is None:
                 raise ImportError("openai package not installed. Run 'pip install openai'")
             kwargs: dict[str, Any] = {
@@ -130,6 +140,8 @@ class LLMClient:
                     "HTTP-Referer": "https://algocraft.ai",
                     "X-Title": "AlgoCraft",
                 }
+            elif self.provider == "aicredits":
+                kwargs["base_url"] = self.config.base_url or "https://api.aicredits.in/v1"
             elif self.config.base_url:
                 kwargs["base_url"] = self.config.base_url
             self._client = OpenAI(**kwargs)
@@ -168,7 +180,7 @@ class LLMClient:
         stream: bool = False,
     ) -> str:
         try:
-            if self.provider in ("openrouter", "openai", "ollama"):
+            if self.provider in ("openrouter", "openai", "ollama", "aicredits"):
                 return await self._generate_openai_compatible(prompt, system, temperature, max_tokens)
             return await self._generate_anthropic(prompt, system, temperature, max_tokens)
         except InvalidApiKeyError:

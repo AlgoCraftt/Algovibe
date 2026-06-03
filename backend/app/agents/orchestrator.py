@@ -20,6 +20,7 @@ from langgraph.graph import StateGraph, END
 from app.agents.architect import analyze_prompt
 from app.agents.algorand_agent import AlgorandAgent
 from app.agents.react_agent import generate_react_frontend
+from app.agents.security_auditor import audit_contract, AuditReport
 from app.services.compiler_client import CompilerClient
 from app.services.deployment_generator import DeploymentGenerator
 from app.services.build_store import save_build, load_build, delete_build
@@ -76,6 +77,9 @@ class PipelineState(TypedDict):
 
 # Maximum retry attempts
 MAX_COMPILE_RETRIES = 5
+
+# Maximum audit-driven regeneration passes (after a successful compile)
+MAX_AUDIT_FIX_PASSES = 1
 
 
 def create_pipeline() -> StateGraph:
@@ -499,6 +503,97 @@ async def run_pipeline(
         else:
             yield {"step": "error", "message": f"Compilation failed after {MAX_COMPILE_RETRIES} attempts. Please try again with a simpler prompt or rephrase your request."}
             return
+
+    # ── Security Audit (after successful compile, before deploy) ──────────────
+    audit_fix_passes = 0
+    while True:
+        yield {"step": "auditing", "message": "Running security audit on contract..."}
+        try:
+            report: AuditReport = await audit_contract(
+                contract_code=state.get("contract_code", ""),
+                spec=state.get("contract_spec", {}),
+                template_type=state.get("template_type", ""),
+                framework=state.get("framework", "puyats"),
+            )
+        except InvalidApiKeyError:
+            raise
+        except Exception as e:
+            logger.warning(f"[ORCHESTRATOR] Audit failed (non-blocking): {e}")
+            break
+
+        yield {
+            "step": "audit_complete",
+            "message": report.summary(),
+            "audit_report": report.to_dict(),
+        }
+
+        # If critical issues found and we have a fix pass left, regenerate with findings
+        if report.has_critical and audit_fix_passes < MAX_AUDIT_FIX_PASSES:
+            audit_fix_passes += 1
+
+            # Snapshot the known-good compiled state so we can revert if the fix breaks compilation
+            good_snapshot = {
+                "contract_code": state.get("contract_code"),
+                "contract_filename": state.get("contract_filename"),
+                "approval_teal": state.get("approval_teal"),
+                "clear_teal": state.get("clear_teal"),
+                "arc32_spec": state.get("arc32_spec"),
+            }
+
+            yield {
+                "step": "audit_fixing",
+                "message": f"Security audit found {len(report.critical)} critical issue(s) — regenerating contract...",
+                "audit_report": report.to_dict(),
+            }
+
+            # Regenerate with audit findings injected as error context
+            audit_context = (
+                "The contract compiled but FAILED a security audit. "
+                "Fix these security issues while keeping it compilable:\n\n"
+                + report.findings_for_prompt()
+            )
+            agent = AlgorandAgent(framework=state["framework"])
+            regen_ok = True
+            try:
+                spec_with_type = {**state["contract_spec"], "template_type": state.get("template_type", "")}
+                result = await agent.generate_contract(
+                    spec=spec_with_type,
+                    docs_context=state["contract_docs"],
+                    previous_code=state.get("contract_code"),
+                    error_context=audit_context,
+                )
+                state["contract_code"] = result["contract_code"]
+                state["contract_filename"] = result["filename"]
+            except InvalidApiKeyError:
+                raise
+            except Exception as e:
+                logger.warning(f"[ORCHESTRATOR] Audit-fix regeneration failed: {e}")
+                regen_ok = False
+
+            if regen_ok:
+                # Recompile the fixed contract
+                yield {"step": "compiling", "message": "Recompiling after security fixes..."}
+                state = await compile_node(state)
+                for event in state["events"]: yield event
+                state["events"] = []
+
+            if not regen_ok or state.get("error"):
+                # Security fix broke compilation — revert to the known-good audited version
+                logger.warning("[ORCHESTRATOR] Audit-fix failed/broke compile; reverting to last good contract")
+                state.update(good_snapshot)
+                state["error"] = None
+                yield {
+                    "step": "audit_fix_warning",
+                    "message": "Could not auto-fix all security issues without breaking compilation. "
+                               "Proceeding with the audited contract — review findings before mainnet use.",
+                }
+                break
+
+            # Loop again to re-audit the fixed contract
+            continue
+
+        # No critical issues, or out of fix passes — done auditing
+        break
 
     # Deployment code
     state = await generate_deployment_node(state)
