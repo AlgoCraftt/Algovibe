@@ -2,7 +2,6 @@
 
 This document explains how **AlgoVibe** fits into the broader **Hackseries3 / AlgoCraft** workspace, how sibling projects connect, and how AlgoVibe’s agents work together end-to-end.
 
-**Related:** [README.md](../README.md) · [ARCHITECTURE.md](../ARCHITECTURE.md) · [SETUP.md](SETUP.md) · [API.md](API.md) · [SMART_CONTRACTS.md](SMART_CONTRACTS.md)
 
 ---
 

@@ -52,7 +52,7 @@ knowledge/chroma_db/
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-
+docs
 # ── Logs ─────────────────────────────────────────────────────────────────────
 *.log
 backend/llm_logs/
@@ -72,9 +72,8 @@ coverage/
 
 # ── Misc ─────────────────────────────────────────────────────────────────────
 .claude/
-connect-wallet-starter-v2/
-# Ignore stray markdown except project documentation
-ROUND3_PLAYBOOK.md
-tmp/
 
+# ── Scratch / test output dirs (regenerated, not source) ─────────────────────
+tmp/
 generated/
+test_outputs/

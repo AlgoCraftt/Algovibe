@@ -1,0 +1,126 @@
+# Panel 2 — BUSINESS (40% weight — HIGHEST)
+
+> Audience: VCs, product managers, business strategists
+> Format: 3 min present + 2 min Q&A. This panel decides the most points — lead with the problem, not the tech.
+
+---
+
+## 1. Problem statement (1 sentence — memorize it)
+
+> **Algorand developers spend days wiring a smart contract to a working frontend, and non-Solidity builders never start at all — costing the ecosystem the new apps it needs to grow.**
+
+The "X face problem Y costing them Z" version:
+
+> **Web/AI developers who want to build on Algorand face a steep Puya/TEAL + wallet-integration learning curve, costing them days-to-weeks per prototype and pushing most of them to build on EVM chains instead.**
+
+---
+
+## 2. The solution & core value proposition
+
+**AlgoVibe = prompt → compiled, audited Algorand contract + live React dApp, in minutes, with the user's own wallet doing the deploy.**
+
+Core benefit to the user:
+- **Idea → working testnet dApp in one session**, not days.
+- **No TEAL/Puya knowledge required** to get a first working version.
+- **Live preview that signs real transactions** — not a mockup.
+- **Export or publish** a standalone Vite project (no lock-in).
+
+Quantified value (use these framings, label them as estimates):
+- **"Days to minutes"** for a first working contract + UI prototype.
+- **Removes the #1 AI-codegen failure** — disconnected UI — via an automated wiring verifier that reports % coverage.
+- **Zero custody risk**: deploys are wallet-signed, so there's no "we hold your keys" liability.
+
+---
+
+## 3. Why blockchain? (defend this hard — they will ask)
+
+Two layers of answer:
+
+**(a) The product builds blockchain apps — so blockchain is the substrate, not a bolt-on.** AlgoVibe's entire output is on-chain: ARC-32 contracts, app deploys, ASA mints, DeFi integrations (Tinyman, Folks). A "traditional DB + API" literally cannot produce a deployed smart contract.
+
+**(b) x402 is the killer "why blockchain" feature.** AlgoVibe can generate **pay-per-call APIs** where **payment is the authentication** — HTTP 402 → sign USDC on Algorand → verified on-chain → response served. No API keys, no Stripe account, no chargebacks, instant micro-settlement (fractions of a cent), globally, with on-chain proof. *That* is impossible with a database + API.
+
+> Soundbite: *"We're not putting a database on a blockchain. We generate apps whose core feature — trustless micropayments and verifiable on-chain state — only exists because of the chain."*
+
+---
+
+## 4. Target customer (be specific — NOT "everyone")
+
+Primary, in order:
+
+1. **Hackathon & grant-track builders on Algorand** — people who need a working dApp fast and are already in the ecosystem (Algorand Foundation hackathons, university blockchain clubs).
+2. **Web2 / AI developers curious about Algorand** — can ship to EVM but bounce off Puya/TEAL. AlgoVibe is their on-ramp.
+3. **Indie devs & solo founders monetizing an API or AI tool** — the x402 pay-per-call use case (sell access to an endpoint without building billing infra).
+
+Beachhead: **the Algorand developer community itself** — they have the wallets, the testnet ALGO, and the motivation.
+
+---
+
+## 5. TAM / SAM / SOM (conservative, with sources to cite)
+
+Frame it bottom-up and modest — judges penalize "1% of global finance."
+
+| Layer | Estimate | Basis (cite as ecosystem reports / verify your numbers before pitching) |
+|-------|----------|----------|
+| **TAM** | The AI-codegen / app-builder market (Copilot, Cursor, v0, Bolt, Replit) — multi-billion $ and growing | General dev-tools market reports |
+| **SAM** | Web3 / smart-contract developers globally — ~tens of thousands of active monthly chain devs | Public developer-report style figures (e.g. annual "developer report" surveys) |
+| **SOM (realistic 12-mo)** | The **Algorand active developer base** — target the first **0.1–1%** of active Algorand devs as paying/active users | Algorand Foundation ecosystem activity |
+
+> Honest soundbite: *"We're not claiming global finance. Our serviceable target is active Algorand developers, and our first goal is the first few hundred of them — the hackathon and grant crowd we're standing in front of."*
+
+⚠️ **Action before pitch:** replace the qualitative figures above with 2–3 real numbers from named sources (a developer report + Algorand ecosystem stats). Even rough is fine; named source > big number.
+
+---
+
+## 6. Revenue model (realistic)
+
+Layered, freemium-to-usage:
+
+1. **BYOK free tier** — user brings their own LLM key; we charge nothing for generation. Drives adoption. (Already built — `X-LLM-Api-Key` header.)
+2. **Managed tier (subscription)** — we provide the LLM, higher limits, saved projects, private builds. $X/mo.
+3. **Usage / deploy add-ons** — one-click Vercel publish, hosting, premium templates, protocol integrations (Tinyman/Folks). (`vercel_publish.py` already exists.)
+4. **x402 take-rate (the long game)** — for apps that ship pay-per-call endpoints generated by AlgoVibe, a small facilitator/platform fee on settled calls. This scales with *our users' success*, not just headcount.
+
+> Soundbite: *"Free with your own key to win developers, subscription for managed convenience, and a usage fee on the x402 payments our generated apps process — so we earn when our users earn."*
+
+---
+
+## 7. Go-to-market (1-line; full detail lives in Panel 3)
+
+Start where the customers already are: the **Algorand hackathon + grant ecosystem**, then content/templates, then partnerships. (See `PANEL_3_SCALABILITY.md` for the first-100-users plan.)
+
+---
+
+## 8. Competitive positioning
+
+| Tool | What it does | Why AlgoVibe wins for Algorand |
+|------|--------------|-------------------------------|
+| v0 / Bolt / Lovable | Generate web UIs | No smart contracts, no chain, no wallet deploy |
+| Cursor / Copilot | Code assistance in editor | No end-to-end compile→deploy→preview; assumes you know Puya |
+| Algorand IDE / AlgoFlow (sibling tools) | Manual editor / visual blocks | AlgoVibe is the **natural-language** path; same compiler infra |
+| Remix-style EVM tools | EVM contract building | Different chain; AlgoVibe is Algorand-native + x402 |
+
+Moat: **Algorand-specific correctness** (Puya skills, banned-pattern sanitizer, deterministic auditor, wiring verifier) + **x402 settlement integration** — not just "an LLM with a prompt."
+
+---
+
+## 9. Customer validation (handle honestly)
+
+⚠️ **Do this before the pitch:** talk to **5–10 real Algorand devs / hackathon participants** and write down quotes. The brief explicitly says *don't say "we haven't validated."*
+
+Prepared framing if validation is thin:
+> *"We've put it in front of [N] developers at [event/community]. The recurring feedback was [X — e.g. 'the wallet-signed deploy and live preview are the parts that save the most time']. The thing they pushed back on was [Y]."*
+
+If you genuinely have none yet, the credible line is:
+> *"Our validation so far is usage-based — here are recorded end-to-end builds in `test_outputs/`. Our immediate next step is structured interviews with the Algorand hackathon cohort."*
+
+---
+
+## 10. The 3-minute business script
+
+1. **(30s) Problem** — "Building on Algorand means learning Puya/TEAL and hand-wiring wallets. Most web devs bounce to EVM. The ecosystem loses the apps it needs."
+2. **(45s) Solution + demo hook** — "AlgoVibe: prompt to deployed dApp in minutes." Trigger the live generation now.
+3. **(30s) Why blockchain** — x402 pay-per-call: payment is auth, impossible without the chain.
+4. **(30s) Market + customer** — "Beachhead: active Algorand developers; first the hackathon/grant crowd."
+5. **(30s) Revenue** — "Free BYOK to win devs, managed subscription, and a usage fee on x402 payments our apps process."
+6. **(15s) Ask / traction** — recorded builds + what you need next.
