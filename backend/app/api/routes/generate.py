@@ -65,7 +65,7 @@ async def event_generator(
             async for event in run_pipeline(prompt, framework, network, user_wallet):
                 event = _normalize_event_fields(event)
                 yield f"data: {json.dumps(event)}\n\n"
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.01)
         except InvalidApiKeyError:
             yield _error_sse("Invalid API key. Check AI Settings and try again.", error_code="invalid_api_key")
         except ValueError as e:
@@ -86,7 +86,7 @@ async def finalize_event_generator(
             async for event in run_pipeline_finalize(build_id, app_id):
                 event = _normalize_event_fields(event)
                 yield f"data: {json.dumps(event)}\n\n"
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.01)
         except InvalidApiKeyError:
             yield _error_sse("Invalid API key. Check AI Settings and try again.", error_code="invalid_api_key")
         except Exception as e:

@@ -11,6 +11,22 @@ const walletManager = new WalletManager({
     WalletId.LUTE
   ],
   defaultNetwork: NetworkId.TESTNET,
+  networks: {
+    [NetworkId.TESTNET]: {
+      algod: {
+        baseServer: 'https://testnet-api.algonode.cloud',
+        port: 443,
+        token: '',
+      },
+    },
+    [NetworkId.MAINNET]: {
+      algod: {
+        baseServer: 'https://mainnet-api.algonode.cloud',
+        port: 443,
+        token: '',
+      },
+    },
+  },
 })
 
 export function AlgorandProvider({ children }: { children: ReactNode }) {

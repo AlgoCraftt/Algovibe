@@ -337,7 +337,7 @@ export const useContractState = (app_id: number | string) => {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, 5000);
+    const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
   }, [refresh]);
 

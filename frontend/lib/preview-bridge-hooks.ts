@@ -162,6 +162,8 @@ export const useContractState = (app_id: number | string) => {
 
     const refresh = useCallback(async () => {
         if (!app_id || app_id === "0") return;
+        // Don't poll when tab is hidden (saves requests when user isn't looking)
+        if (typeof document !== 'undefined' && document.hidden) return;
         try {
             const data = await readState(app_id);
             setState(data as any);
@@ -175,8 +177,14 @@ export const useContractState = (app_id: number | string) => {
 
     useEffect(() => {
         refresh();
-        const interval = setInterval(refresh, 5000);
-        return () => clearInterval(interval);
+        const interval = setInterval(refresh, 15000);
+        // Pause polling when tab is hidden
+        const handleVisibility = () => { if (!document.hidden) refresh(); };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
     }, [refresh]);
 
     useEffect(() => {
@@ -277,16 +285,23 @@ export function patchPreviewBridgeFiles(files: Record<string, string>): Record<s
   const hasHooks = Object.keys(out).some((p) => p.includes('useAlgorand'))
   if (!hasHooks) return out
 
+  // Fix #2: Patch ANY path containing these hook names (not just hardcoded paths)
+  // LLM sometimes generates hooks at /lib/useAlgorand.ts, /src/hooks/useAlgorand.ts, etc.
+  for (const p of Object.keys(out)) {
+    if (p.includes('useAlgorand') && !p.includes('useAlgorandProvider') && p.endsWith('.ts')) {
+      out[p] = PREVIEW_USE_ALGORAND_TS
+    }
+    if (p.includes('useContractState') && p.endsWith('.ts')) {
+      out[p] = PREVIEW_USE_CONTRACT_STATE_TS
+    }
+  }
+  // Also ensure the canonical paths exist (for imports that reference them)
   for (const p of HOOK_PATHS) {
     if (p.includes('useAlgorand')) {
       out[p] = PREVIEW_USE_ALGORAND_TS
-      const slash = p.startsWith('/') ? p : `/${p}`
-      if (slash !== p) out[slash] = PREVIEW_USE_ALGORAND_TS
     }
     if (p.includes('useContractState')) {
       out[p] = PREVIEW_USE_CONTRACT_STATE_TS
-      const slash = p.startsWith('/') ? p : `/${p}`
-      if (slash !== p) out[slash] = PREVIEW_USE_CONTRACT_STATE_TS
     }
   }
 

@@ -41,6 +41,7 @@ export function BridgeHandler() {
   const [successTxId, setSuccessTxId] = useState<string | null>(null)
 
   // Notify Sandpack iframe when parent wallet connects / changes (fixes opt-in UI after reload)
+  // Fix: Use multiple retry timings + iframe load event to guarantee delivery
   useEffect(() => {
     const notify = () => {
       document.querySelectorAll('iframe').forEach((iframe) => {
@@ -54,9 +55,29 @@ export function BridgeHandler() {
         )
       })
     }
+
+    // Immediate + escalating retries to cover Sandpack's 2-5s init time
     notify()
-    const t = setTimeout(notify, 500)
-    return () => clearTimeout(t)
+    const t1 = setTimeout(notify, 500)
+    const t2 = setTimeout(notify, 1500)
+    const t3 = setTimeout(notify, 3000)
+    const t4 = setTimeout(notify, 5000)
+
+    // Also listen for iframe load events (covers fresh/hot reload)
+    const handleLoad = () => { setTimeout(notify, 300) }
+    document.querySelectorAll('iframe').forEach((iframe) => {
+      iframe.addEventListener('load', handleLoad)
+    })
+
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearTimeout(t3)
+      clearTimeout(t4)
+      document.querySelectorAll('iframe').forEach((iframe) => {
+        iframe.removeEventListener('load', handleLoad)
+      })
+    }
   }, [activeAddress])
 
   const isAccountOptedIn = async (appId: number, address: string) => {
@@ -75,6 +96,18 @@ export function BridgeHandler() {
       if (!event.source) return
 
       console.log(`[BridgeHandler] Received request: ${data.type}`, data.payload)
+
+      // On first message from iframe, ensure it has our wallet state
+      if (data.type === 'GET_ADDRESS' || data.type === 'READ_STATE') {
+        // Also send a WALLET_CHANGED event (belt-and-suspenders for timing issues)
+        try {
+          (event.source as any).postMessage({
+            type: 'ALGOCRAFT_EVENT',
+            event: 'WALLET_CHANGED',
+            payload: { address: activeAddress ?? '' },
+          }, '*')
+        } catch {}
+      }
 
       switch (data.type) {
         case 'GET_ADDRESS': {
@@ -195,7 +228,10 @@ export function BridgeHandler() {
     const resp = await algodClient.sendRawTransaction(signed[0]).do()
     const txId = (resp as any).txId || (resp as any).txid || ''
     if (!txId) throw new Error('OptIn transaction submitted but no TX ID returned')
-    await algosdk.waitForConfirmation(algodClient, txId, 10)
+    await Promise.race([
+      algosdk.waitForConfirmation(algodClient, txId, 10),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timed out after 30 seconds. Check the explorer.')), 30000))
+    ])
     return txId
   }
 
@@ -388,68 +424,68 @@ export function BridgeHandler() {
       }
 
       const method = contract.getMethodByName(payload.method)
-      const abiMethodArgs = method.args.filter((a) => !isPayAbiType(a.type.toString()))
-      const payMethodArgs = method.args.filter((a) => isPayAbiType(a.type.toString()))
 
-      // 1.5 Validate arguments against ABI (pay args use payload.payment, not args[])
-      if (payload.args.length !== abiMethodArgs.length) {
-        throw new Error(
-          `Method '${method.name}' expects ${abiMethodArgs.length} arguments, but received ${payload.args.length}.`
-        )
-      }
-      if (payMethodArgs.length > 0 && (!payload.payment || payload.payment.amount <= 0)) {
-        throw new Error(`Method '${method.name}' requires a payment amount (microAlgos).`)
-      }
+      // ─── Use AtomicTransactionComposer for proper ARC-4 ABI encoding ─────
+      // ATC handles Account/Asset/Application reference types correctly
+      // (puts them in foreign arrays, encodes indices in app args).
+      // It also handles transaction references (pay, axfer) as grouped txns.
 
-      payload.args.forEach((arg, i) => {
-        const argSpec = abiMethodArgs[i]
+      const atc = new algosdk.AtomicTransactionComposer()
+
+      // Build the method call args in the order the ABI method expects them.
+      // For each arg: if it's a transaction type (pay), provide a TransactionWithSigner.
+      // For other types, provide the raw value and ATC encodes it correctly.
+      const methodArgs: any[] = []
+      let userArgIdx = 0
+
+      for (const argSpec of method.args) {
         const typeStr = argSpec.type.toString()
-        if (typeStr === 'uint64') {
-          if (typeof arg !== 'number' && isNaN(Number(arg))) {
-            throw new Error(`Argument ${i} ('${argSpec.name}') of method '${method.name}' must be a number (uint64), but received '${typeof arg}'.`)
-          }
-        } else if (typeStr === 'string') {
-          if (typeof arg !== 'string') {
-            throw new Error(`Argument ${i} ('${argSpec.name}') of method '${method.name}' must be a string, but received '${typeof arg}'.`)
-          }
-        }
-      })
 
-      // 2. Prepare arguments
-      const appArgs: Uint8Array[] = [method.getSelector()]
-
-      payload.args.forEach((arg, i) => {
-        const argSpec = abiMethodArgs[i]
-        const typeStr = argSpec.type.toString()
-        if (typeStr === 'uint64' || typeStr.startsWith('uint')) {
-          appArgs.push(algosdk.encodeUint64(BigInt(arg)))
-        } else if (typeStr === 'bool') {
-          appArgs.push(algosdk.encodeUint64(BigInt(arg ? 1 : 0)))
-        } else if (typeStr === 'address' || typeStr === 'Account') {
-          try {
-            appArgs.push(algosdk.decodeAddress(String(arg)).publicKey)
-          } catch {
-            appArgs.push(new TextEncoder().encode(String(arg)))
+        if (isPayAbiType(typeStr)) {
+          // Transaction reference (pay) — build a payment transaction
+          const payAmount = payload.payment?.amount || 0
+          if (payAmount <= 0) {
+            throw new Error(`Method '${method.name}' requires a payment amount.`)
           }
-        } else if (typeStr === 'string') {
-          const encoded = new TextEncoder().encode(String(arg))
-          // ABI string encoding: 2-byte length prefix
-          const lenBuf = new Uint8Array(2)
-          new DataView(lenBuf.buffer).setUint16(0, encoded.length)
-          const full = new Uint8Array(2 + encoded.length)
-          full.set(lenBuf)
-          full.set(encoded, 2)
-          appArgs.push(full)
-        } else if (typeStr === 'bytes' || typeStr.startsWith('byte[')) {
-          appArgs.push(new TextEncoder().encode(String(arg)))
+          const payTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+            sender: activeAddress as string,
+            receiver: payload.payment?.receiver || algosdk.getApplicationAddress(Number(payload.appId)),
+            amount: payAmount,
+            suggestedParams: params,
+          })
+          methodArgs.push({
+            txn: payTxn,
+            signer: transactionSigner,
+          })
         } else {
-          appArgs.push(new TextEncoder().encode(String(arg)))
-        }
-      })
+          // Regular ABI arg — use the value from payload.args
+          const arg = payload.args[userArgIdx]
+          userArgIdx++
 
-      // 3. Build Transaction — onComplete from ARC-32 hints (e.g. OptIn for allowActions: 'OptIn')
+          if (typeStr === 'uint64' || typeStr.startsWith('uint')) {
+            methodArgs.push(BigInt(Number(arg)))
+          } else if (typeStr === 'bool') {
+            methodArgs.push(Boolean(arg))
+          } else if (typeStr === 'account' || typeStr === 'address') {
+            // ATC handles account references: pass the address string
+            methodArgs.push(String(arg))
+          } else if (typeStr === 'asset') {
+            methodArgs.push(Number(arg))
+          } else if (typeStr === 'application') {
+            methodArgs.push(Number(arg))
+          } else if (typeStr === 'string') {
+            methodArgs.push(String(arg))
+          } else if (typeStr === 'bytes' || typeStr.startsWith('byte')) {
+            methodArgs.push(new Uint8Array(new TextEncoder().encode(String(arg))))
+          } else {
+            // Default: pass as-is (ATC will attempt encoding)
+            methodArgs.push(arg)
+          }
+        }
+      }
+
+      // Determine onComplete
       let onComplete = getMethodOnComplete(payload.method, freshSpec)
-      // If method requires OptIn but account is already opted in, use NoOp (standard post-opt-in calls)
       if (onComplete === algosdk.OnApplicationComplete.OptInOC) {
         try {
           const accountInfo = await algodClient.accountInformation(activeAddress as string).do()
@@ -463,55 +499,47 @@ export function BridgeHandler() {
         }
       }
 
-      const txn = algosdk.makeApplicationCallTxnFromObject({
+      // Box references (if contract uses box storage)
+      const contractSpecForBox = useAlgoCraftStore.getState().contractSpec as any
+      const arc32ForBoxCheck = useAlgoCraftStore.getState().arc32Spec
+      const boxCapFlag = contractSpecForBox?.capabilities?.uses_box_storage
+      const specStr = JSON.stringify(arc32ForBoxCheck || {}).toLowerCase()
+      const usesBoxes = boxCapFlag === true || (
+        boxCapFlag === undefined && (specStr.includes('box') || specStr.includes('boxmap'))
+      )
+
+      let boxRefs: any[] | undefined = undefined
+      if (usesBoxes) {
+        const senderPubKey = algosdk.decodeAddress(activeAddress as string).publicKey
+        boxRefs = []
+        const commonPrefixes = ['', 'b', 'c', 'counter', 'v', 'd', 'u', 'p']
+        for (const prefix of commonPrefixes) {
+          const prefixBytes = new TextEncoder().encode(prefix)
+          const combined = new Uint8Array(prefixBytes.length + senderPubKey.length)
+          combined.set(prefixBytes, 0)
+          combined.set(senderPubKey, prefixBytes.length)
+          boxRefs.push({ appIndex: 0, name: combined })
+          if (boxRefs.length >= 7) break
+        }
+        boxRefs.push({ appIndex: 0, name: new Uint8Array(0) })
+      }
+
+      // Add method call to ATC
+      atc.addMethodCall({
+        appID: Number(payload.appId),
+        method,
+        methodArgs,
         sender: activeAddress as string,
-        appIndex: Number(payload.appId),
+        signer: transactionSigner,
+        suggestedParams: { ...params, fee: params.fee || 1000, flatFee: true },
         onComplete,
-        appArgs,
-        suggestedParams: params,
-      })
+        boxes: boxRefs,
+      } as any)
 
-      // 4. Handle Payment atomic group — payment MUST come before app call (index 0)
-      let txns = [txn]
-      if (payload.payment) {
-        const payTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-          sender: activeAddress as string,
-          receiver: algosdk.getApplicationAddress(Number(payload.appId)),
-          amount: payload.payment.amount,
-          suggestedParams: params,
-        })
-        // payment at index 0, app call at index 1 — matches gtxn.PaymentTxn(Uint64(0))
-        txns = [payTxn, txn]
-        algosdk.assignGroupID(txns)
-      }
-
-      // 5. Sign and Submit
-      // Wrap in timeout because Pera/Defly wallets sometimes silently fail during simulation, hanging the promise
-      const signPromise = transactionSigner(txns, txns.map((_, i) => i))
-      const signed = await Promise.race([
-        signPromise,
-        new Promise<Uint8Array[]>((_, reject) =>
-          setTimeout(() => reject(new Error("Wallet took too long to respond. The transaction may have failed simulation in your wallet app, or connection was dropped.")), 45000)
-        )
-      ])
-
-      // Concatenate signed transactions safely for all algosdk versions
-      const totalLength = signed.reduce((acc, curr) => acc + curr.length, 0)
-      const signedBytes = new Uint8Array(totalLength)
-      let offset = 0
-      for (const b of signed) {
-        signedBytes.set(b, offset)
-        offset += b.length
-      }
-
-      const response = await algodClient.sendRawTransaction(signedBytes).do()
-      const txId = (response as any).txId || (response as any).txid || (response as any)['txId'] || (response as any)['txid'] || ''
-
-      if (!txId) {
-        throw new Error("Transaction was submitted but no Transaction ID was returned by the node.")
-      }
-
-      await algosdk.waitForConfirmation(algodClient, txId, 10)
+      // Execute via ATC — handles grouping, signing, and submission
+      console.log('[BridgeHandler] Executing via ATC:', payload.method, methodArgs.length, 'args')
+      const atcResult = await atc.execute(algodClient, 10)
+      const txId = atcResult.txIDs[atcResult.txIDs.length - 1] || ''
 
       setSuccessTxId(txId)
       sendResponse(source, request.id, { txId, success: true })

@@ -128,61 +128,70 @@ Every non-lifecycle method exported by useContract() MUST be called somewhere in
 - Load global stats on mount even before wallet connects: call `readState()` in useEffect on mount without requiring activeAddress; only gate opt-in / local actions on wallet.
 - Guard write method calls with `if (!activeAddress) return` — show "Connect your wallet" message if not connected
 - Each method call goes in its own async handler with try/catch
-- CRITICAL — LOCAL STATE OPT-IN: If the contract spec has any `local_state` entries, you MUST implement an opt-in flow:
-  1. On load, call `readState()` — it returns `{ __opted_in__: boolean, ...globalState }`. Check `state.__opted_in__`
-  2. If `__opted_in__` is false or undefined, show a prominent "Opt In to App" card BEFORE showing any action buttons
-  3. The opt-in button MUST call `callMethod({ method: '__optIn__', args: [], app_id: APP_ID })` from `useAlgorand()` — NEVER call `opt_in()` from `useContract()`, that does not exist
-  4. After opt-in succeeds, set local state `hasOptedIn = true` and show the normal action UI
-  5. After opt-in succeeds, call `refreshData()` — trust `__opted_in__` from chain on reload
-  6. For uint64 contract args (e.g. cast_vote(0|1)), pass JavaScript numbers — NEVER BigInt literals (0n)
-  7. NEVER use JSON.stringify() on contractState (may contain bigint from chain)
-  Example — COPY THIS EXACTLY:
-  ```tsx
-  const { activeAddress, callMethod, onWalletReady } = useAlgorand();
-  const { vote, readState, loading, error, success } = useContract();
-  const [hasOptedIn, setHasOptedIn] = useState(false);
-  const [contractState, setContractState] = useState<any>({});
-
-  const refreshData = useCallback(async () => {
-    try {
-      const s: any = await readState();
-      setContractState(s);
-      if (s.__opted_in__ === true) setHasOptedIn(true);
-      else if (s.__opted_in__ === false && activeAddress) setHasOptedIn(false);
-    } catch (err) {
-      console.error('Failed to fetch state:', err);
-    }
-  }, [readState, activeAddress]);
-
-  useEffect(() => { refreshData(); }, [refreshData]);
-  useEffect(() => {
-    const unsub = onWalletReady(() => { refreshData(); });
-    return unsub;
-  }, [onWalletReady, refreshData]);
-
-  const handleOptIn = async () => {
-    if (!activeAddress) return;
-    try {
-      const res: any = await callMethod({ method: '__optIn__', args: [], app_id: APP_ID });
-      if (res?.alreadyOptedIn) {
-        setHasOptedIn(true);
-      } else {
-        setHasOptedIn(true);
-      }
-      await refreshData();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/already opted|already opt/i.test(msg)) {
-        setHasOptedIn(true);
-        await refreshData();
-      } else {
-        console.error('Opt-in failed:', err);
-      }
-    }
-  };
-  ```
+- Guard write method calls with `if (!activeAddress) return` — show "Connect your wallet" message if not connected
+- Each method call goes in its own async handler with try/catch
+- If the contract spec has `local_state` entries, an opt-in flow is required (detailed instructions provided separately when applicable).
 
 Output ONLY the complete App.tsx code. No markdown fences. No explanation."""
+
+# Appended ONLY when the contract spec has local_state (saves ~50 lines of context otherwise)
+OPT_IN_SUPPLEMENT = """
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LOCAL STATE OPT-IN FLOW (REQUIRED — this contract has local_state):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. On load, call `readState()` — it returns `{ __opted_in__: boolean, ...globalState }`. Check `state.__opted_in__`
+2. If `__opted_in__` is false or undefined, show a prominent "Opt In to App" card BEFORE showing any action buttons
+3. The opt-in button MUST call `callMethod({ method: '__optIn__', args: [], app_id: APP_ID })` from `useAlgorand()` — NEVER call `opt_in()` from `useContract()`, that does not exist
+4. After opt-in succeeds, set local state `hasOptedIn = true` and show the normal action UI
+5. After opt-in succeeds, call `refreshData()` — trust `__opted_in__` from chain on reload
+6. For uint64 contract args (e.g. cast_vote(0|1)), pass JavaScript numbers — NEVER BigInt literals (0n)
+7. NEVER use JSON.stringify() on contractState (may contain bigint from chain)
+Example — COPY THIS EXACTLY:
+```tsx
+const { activeAddress, callMethod, onWalletReady } = useAlgorand();
+const { vote, readState, loading, error, success } = useContract();
+const [hasOptedIn, setHasOptedIn] = useState(false);
+const [contractState, setContractState] = useState<any>({});
+
+const refreshData = useCallback(async () => {
+  try {
+    const s: any = await readState();
+    setContractState(s);
+    if (s.__opted_in__ === true) setHasOptedIn(true);
+    else if (s.__opted_in__ === false && activeAddress) setHasOptedIn(false);
+  } catch (err) {
+    console.error('Failed to fetch state:', err);
+  }
+}, [readState, activeAddress]);
+
+useEffect(() => { refreshData(); }, [refreshData]);
+useEffect(() => {
+  const unsub = onWalletReady(() => { refreshData(); });
+  return unsub;
+}, [onWalletReady, refreshData]);
+
+const handleOptIn = async () => {
+  if (!activeAddress) return;
+  try {
+    const res: any = await callMethod({ method: '__optIn__', args: [], app_id: APP_ID });
+    if (res?.alreadyOptedIn) {
+      setHasOptedIn(true);
+    } else {
+      setHasOptedIn(true);
+    }
+    await refreshData();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/already opted|already opt/i.test(msg)) {
+      setHasOptedIn(true);
+      await refreshData();
+    } else {
+      console.error('Opt-in failed:', err);
+    }
+  }
+};
+```"""
 
 REACT_AGENT_USER_PROMPT = """Create a PREMIUM App.tsx for: {name} — {description}
 
@@ -295,8 +304,15 @@ async def generate_react_frontend(
 
     # For x402_service templates, append x402 client UI instructions
     system_prompt = REACT_AGENT_SYSTEM_PROMPT
+    caps = spec.get("capabilities") or {}
     if template_type == "x402_service" or spec.get("x402_integration"):
         system_prompt += X402_REACT_SUPPLEMENT
+
+    # Append opt-in flow instructions ONLY if the contract uses local state.
+    # Prefer capability flag; fall back to checking local_state directly.
+    uses_local_state = caps.get("uses_local_state") if caps else bool(spec.get("local_state"))
+    if uses_local_state:
+        system_prompt += OPT_IN_SUPPLEMENT
 
     # Build hook methods list from ARC32 so the LLM knows exactly what to wire
     hook_methods_list = _build_hook_methods_list(arc32_spec, spec)
@@ -315,7 +331,8 @@ async def generate_react_frontend(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=0.0,
-        max_tokens=8000,
+        max_tokens=16000,
+        caller="react_agent",
     )
 
     if not response:
@@ -1435,6 +1452,7 @@ async def fix_frontend_files(
         user_prompt="\n\n".join(user_parts),
         temperature=0.1,
         max_tokens=16000,
+        caller="react_agent_fix",
     )
     if not response:
         raise ReactGenerationError("LLM returned empty fix response")
@@ -1448,6 +1466,7 @@ async def fix_frontend_files(
             user_prompt="\n\n".join(user_parts),
             temperature=0.0,
             max_tokens=16000,
+            caller="react_agent_fix_retry",
         )
         if not retry:
             raise ReactGenerationError("LLM returned empty fix response on retry") from e

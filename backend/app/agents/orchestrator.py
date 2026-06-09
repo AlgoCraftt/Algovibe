@@ -27,6 +27,7 @@ from app.services.build_store import save_build, load_build, delete_build
 from app.services.dapp_path_repair import verify_and_repair_dapp
 from app.services.dapp_simulator import simulate_dapp_on_testnet
 from app.core.llm import InvalidApiKeyError
+from app.core.run_logger import RunLog
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -189,11 +190,15 @@ async def generate_contract_node(state: PipelineState) -> PipelineState:
     try:
         # Include template_type in spec so the agent can load appropriate skills
         spec_with_type = {**state["contract_spec"], "template_type": state.get("template_type", "")}
+        # Fix #13: Truncate error context to prevent snowballing (LLM gets confused by long errors)
+        error_ctx = state.get("error") if is_retry else None
+        if error_ctx and len(error_ctx) > 500:
+            error_ctx = error_ctx[:500] + "\n... (truncated)"
         result = await agent.generate_contract(
             spec=spec_with_type,
             docs_context=state["contract_docs"],
             previous_code=state.get("contract_code") if is_retry else None,
-            error_context=state.get("error") if is_retry else None,
+            error_context=error_ctx,
         )
         state["contract_code"] = result["contract_code"]
         state["contract_filename"] = result["filename"]
@@ -413,6 +418,10 @@ async def run_pipeline(
 ) -> AsyncGenerator[dict, None]:
     """Run the Algorand dApp generation pipeline"""
     logger.info(f"[ORCHESTRATOR] STARTING PIPELINE: {framework} on {network}")
+
+    # Initialize run logger — captures the entire build for diagnostics
+    run_log = RunLog(user_prompt=prompt, framework=framework)
+    run_log.event("pipeline_start", f"framework={framework}, network={network}")
     
     state: PipelineState = {
         "prompt": prompt,
@@ -441,11 +450,22 @@ async def run_pipeline(
     }
 
     # Analyze + retrieve docs
-    analyze_res, contract_docs_res, sdk_docs_res = await asyncio.gather(
-        analyze_node({**state, "events": []}),
-        retrieve_contract_docs_node({**state, "events": []}),
-        retrieve_sdk_docs_node({**state, "events": []})
-    )
+    try:
+        analyze_res, contract_docs_res, sdk_docs_res = await asyncio.gather(
+            analyze_node({**state, "events": []}),
+            retrieve_contract_docs_node({**state, "events": []}),
+            retrieve_sdk_docs_node({**state, "events": []})
+        )
+    except InvalidApiKeyError:
+        run_log.set_error("Invalid API key")
+        run_log.save()
+        yield {"step": "error", "message": "Invalid API key. Check AI Settings and try again.", "error_code": "invalid_api_key"}
+        return
+    except Exception as e:
+        run_log.set_error(str(e))
+        run_log.save()
+        yield {"step": "error", "message": f"Initialization failed: {str(e)}"}
+        return
     
     state.update({
         "template_type": analyze_res.get("template_type", ""),
@@ -453,7 +473,10 @@ async def run_pipeline(
         "contract_docs": contract_docs_res["contract_docs"],
         "sdk_docs": sdk_docs_res["sdk_docs"],
     })
-    
+
+    # Log the architect's output
+    run_log.set_spec(state["template_type"], state["contract_spec"])
+
     for event in analyze_res["events"] + contract_docs_res["events"]:
         yield event
 
@@ -466,6 +489,7 @@ async def run_pipeline(
         return
 
     # Generation loop
+    last_errors: list[str] = []  # Track errors for loop detection
     while True:
         retry_count = state.get("compile_retry_count", 0)
         attempt_label = f"(attempt {retry_count + 1}/{MAX_COMPILE_RETRIES + 1})" if retry_count > 0 else ""
@@ -483,10 +507,26 @@ async def run_pipeline(
         state = await compile_node(state)
         for event in state["events"]: yield event
         state["events"] = []
+
+        # Log the compile attempt
+        run_log.add_contract_attempt(
+            code=state.get("contract_code", ""),
+            compile_success=not bool(state.get("error")),
+            error=state.get("error"),
+        )
         
         if not state.get("error"):
             yield {"step": "compiling", "message": "Compilation successful!"}
             break
+        
+        # Track errors for loop detection — if same error repeats 3 times, bail early
+        current_error = (state.get("error", ""))[:150]
+        last_errors.append(current_error)
+        if len(last_errors) >= 3 and len(set(last_errors[-3:])) == 1:
+            run_log.set_error("Same error repeated 3 times")
+            run_log.save()
+            yield {"step": "error", "message": f"Same compilation error repeated 3 times — the model is stuck. Try a simpler prompt or different model."}
+            return
             
         decision = should_retry_compile(state)
         if decision == "retry":
@@ -501,6 +541,8 @@ async def run_pipeline(
             }
             continue
         else:
+            run_log.set_error(f"Compilation failed after {MAX_COMPILE_RETRIES} attempts")
+            run_log.save()
             yield {"step": "error", "message": f"Compilation failed after {MAX_COMPILE_RETRIES} attempts. Please try again with a simpler prompt or rephrase your request."}
             return
 
@@ -526,6 +568,9 @@ async def run_pipeline(
             "message": report.summary(),
             "audit_report": report.to_dict(),
         }
+
+        # Log audit results
+        run_log.set_audit(report.to_dict())
 
         # If critical issues found and we have a fix pass left, regenerate with findings
         if report.has_critical and audit_fix_passes < MAX_AUDIT_FIX_PASSES:
@@ -611,6 +656,10 @@ async def run_pipeline(
     save_build(build_id, state)
     state["sign_required"] = True
     state["pending_build_id"] = build_id
+
+    # Save the run log (pipeline complete up to sign step)
+    run_log.event("pipeline_ready", f"build_id={build_id}")
+    run_log.save()
     
     yield {
         "step": "deploying",

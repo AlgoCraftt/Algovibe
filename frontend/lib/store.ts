@@ -331,7 +331,14 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
       isBuilding: true,
       buildStatus: 'analyzing' as BuildStep,
       buildLogs: [],
+      generatedFiles: {},  // Fix #11: Clear old files on new build (merge is for incremental updates only)
       error: null,
+      arc32Spec: null,
+      deploymentCode: null,
+      pathReport: null,
+      simulationReport: null,
+      pendingSignature: null,
+      contractId: null,
       integratedProtocols: Array.from(new Set([...s.integratedProtocols, ...s.selectedProtocols])),
       selectedProtocols: [],
     }))

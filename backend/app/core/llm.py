@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 try:
@@ -20,6 +21,7 @@ except ImportError:
 
 from app.core.config import settings
 from app.core.llm_config import LlmConfig, get_llm_config
+from app.core.llm_logger import log_llm_call
 
 logger = logging.getLogger(__name__)
 
@@ -178,17 +180,70 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         stream: bool = False,
+        caller: str = "unknown",
     ) -> str:
+        start_time = time.time()
+        # Scale timeout with output size — large generations (16K tokens) need more time
+        timeout_s = 120.0 if max_tokens <= 8192 else 240.0
         try:
-            if self.provider in ("openrouter", "openai", "ollama", "aicredits"):
-                return await self._generate_openai_compatible(prompt, system, temperature, max_tokens)
-            return await self._generate_anthropic(prompt, system, temperature, max_tokens)
+            # Wrap with a timeout to prevent infinite hangs
+            result = await asyncio.wait_for(
+                self._generate_inner(prompt, system, temperature, max_tokens),
+                timeout=timeout_s,
+            )
+            duration_ms = (time.time() - start_time) * 1000
+            # Log successful call
+            log_llm_call(
+                provider=self.provider,
+                model=self.model,
+                system_prompt=system,
+                user_prompt=prompt,
+                response=result,
+                duration_ms=duration_ms,
+                caller=caller,
+            )
+            return result
+        except asyncio.TimeoutError:
+            duration_ms = (time.time() - start_time) * 1000
+            error_msg = (
+                f"LLM call timed out after {int(timeout_s)} seconds (provider={self.provider}, model={self.model}). "
+                "The AI provider may be overloaded. Try again or switch to a faster model."
+            )
+            log_llm_call(
+                provider=self.provider,
+                model=self.model,
+                system_prompt=system,
+                user_prompt=prompt,
+                response="",
+                duration_ms=duration_ms,
+                caller=caller,
+                error=error_msg,
+            )
+            raise TimeoutError(error_msg)
         except InvalidApiKeyError:
             raise
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            log_llm_call(
+                provider=self.provider,
+                model=self.model,
+                system_prompt=system,
+                user_prompt=prompt,
+                response="",
+                duration_ms=duration_ms,
+                caller=caller,
+                error=str(e),
+            )
             if _is_auth_failure(e):
                 raise InvalidApiKeyError("Invalid API key") from e
             raise
+
+    async def _generate_inner(
+        self, prompt: str, system: Optional[str], temperature: float, max_tokens: int
+    ) -> str:
+        if self.provider in ("openrouter", "openai", "ollama", "aicredits"):
+            return await self._generate_openai_compatible(prompt, system, temperature, max_tokens)
+        return await self._generate_anthropic(prompt, system, temperature, max_tokens)
 
     async def _generate_openai_compatible(
         self, prompt: str, system: Optional[str], temperature: float, max_tokens: int
@@ -245,6 +300,7 @@ async def generate_completion(
     system_prompt: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 8192,
+    caller: str = "unknown",
 ) -> str:
     client = get_llm_client()
     try:
@@ -253,6 +309,7 @@ async def generate_completion(
             system=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            caller=caller,
         )
     except InvalidApiKeyError:
         raise

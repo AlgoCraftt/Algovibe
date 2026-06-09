@@ -130,15 +130,16 @@ _PRIVILEGED_HINTS = (
 def _extract_methods(contract_code: str) -> list[dict]:
     """Find @abimethod methods and their bodies in PuyaTS code (best-effort regex)."""
     methods = []
-    # Match: @abimethod(...) public name(args): ret { ...body until matching close }
+    # Match: @abimethod(...) [public] name(args) [: ret] {
+    # Multi-line aware: decorator and signature may span lines, return type optional.
     pattern = re.compile(
-        r"@abimethod\([^)]*\)\s*\n?\s*public\s+(\w+)\s*\(([^)]*)\)\s*:\s*(\w+)",
-        re.MULTILINE,
+        r"@abimethod\([^)]*\)\s*(?:public\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*([\w\[\]<>, ]+?))?\s*\{",
+        re.MULTILINE | re.DOTALL,
     )
     for m in pattern.finditer(contract_code):
         name = m.group(1)
         args = m.group(2)
-        ret = m.group(3)
+        ret = (m.group(3) or "void").strip()
         # Grab a rough body slice (from method start to next @abimethod or class close)
         start = m.end()
         next_method = contract_code.find("@abimethod", start)
@@ -246,8 +247,19 @@ def _check_payment_validation(contract_code: str) -> list[Finding]:
     # If it reads a grouped payment, does it validate receiver AND amount?
     reads_payment = "gtxn.PaymentTxn" in contract_code or "gtxn.AssetTransferTxn" in contract_code
     if reads_payment:
-        validates_receiver = "receiver" in contract_code and "assert" in contract_code
-        validates_amount = bool(re.search(r"assert\([^)]*amount[^)]*>=", contract_code))
+        # Multi-line aware checks (re.DOTALL) — asserts often span several lines.
+        # Receiver validation: an assert mentioning 'receiver' anywhere.
+        validates_receiver = bool(
+            re.search(r"assert\(.*?receiver.*?\)", contract_code, re.DOTALL | re.IGNORECASE)
+        )
+        # Amount validation: an assert with 'amount' AND a comparison (>=, >, ==) nearby.
+        validates_amount = bool(
+            re.search(r"assert\(.*?amount.*?(>=|>|===|==).*?\)", contract_code, re.DOTALL | re.IGNORECASE)
+            or re.search(r"assert\(.*?(>=|>).*?amount.*?\)", contract_code, re.DOTALL | re.IGNORECASE)
+            # Also accept the common pattern: paidAmount >= price
+            or re.search(r"(amount|paid\w*)\s*(>=|>)\s*this\.\w*[Pp]rice", contract_code)
+            or re.search(r"this\.\w*[Pp]rice\w*\.value\s*(<=|<)\s*\w*amount", contract_code, re.IGNORECASE)
+        )
         if not validates_receiver:
             findings.append(Finding(
                 id="payment_receiver",
@@ -287,18 +299,21 @@ def run_deterministic_checks(contract_code: str, framework: str) -> list[Finding
 # LLM deep review (risky templates only)
 # ─────────────────────────────────────────────────────────────────────────────
 
-AUDITOR_SYSTEM_PROMPT = """You are a senior Algorand smart contract security auditor.
-You review PuyaTS (Algorand TypeScript) contracts for security and logic flaws.
+AUDITOR_SYSTEM_PROMPT = """You are an adversarial security researcher attacking an Algorand PuyaTS (TypeScript) smart contract.
+Your goal: find a concrete way to STEAL funds, LOCK funds permanently, or BYPASS the contract's intended rules.
 
-Focus ONLY on real, exploitable issues or logic dead-ends. Do NOT nitpick style.
+Think like an attacker. For each method, ask: "How can I abuse this? What's the worst input? What if I'm not the owner?"
 
-Check for:
-1. Access control — can an unauthorized account call privileged methods (withdraw, mint, admin)?
-2. Fund safety — can deposited funds get permanently locked? Is there always a recovery path?
-3. Logic dead-ends — is there a state the contract can enter where required actions become impossible?
-4. Payment validation — if it reads grouped payments, does it validate receiver AND amount?
-5. Authorization gaps — missing assert(Txn.sender == owner) on state-changing methods.
-6. Reachability — can every method actually succeed under realistic conditions?
+Attack vectors to probe:
+1. Access control — can an unauthorized account call privileged methods (withdraw, mint, admin, set_*)?
+2. Fund theft — can I redirect a payment, withdraw more than I'm owed, or claim funds that aren't mine?
+3. Fund lockup — can deposited funds get permanently stuck with no recovery path?
+4. Logic dead-ends — can the contract reach a state where required actions become impossible?
+5. Payment validation — if it reads grouped payments (gtxn), does it validate BOTH receiver AND amount? Can I underpay or send payment elsewhere?
+6. Authorization gaps — missing assert(Txn.sender == owner) on state-changing methods.
+7. Invariant violations — does the contract uphold the business rules it's supposed to guarantee?
+
+Only report issues you can describe a concrete exploit for. Do NOT nitpick style or report theoretical issues you can't exploit.
 
 Respond ONLY with valid JSON (no markdown):
 {
@@ -306,20 +321,31 @@ Respond ONLY with valid JSON (no markdown):
     {
       "severity": "critical" | "warning" | "info",
       "title": "short title",
-      "detail": "one-sentence explanation of the issue and impact",
+      "detail": "the concrete exploit: who calls what, with what input, to cause what harm",
       "fix_hint": "concrete one-line fix"
     }
   ]
 }
-If the contract is secure, return {"findings": []}. Only report issues you are confident are real."""
+If you cannot find a real exploit, return {"findings": []}. Quality over quantity — only confident, exploitable findings."""
 
 
 async def run_llm_audit(contract_code: str, spec: dict, framework: str) -> list[Finding]:
     """LLM deep-review for risky contracts. Returns findings (empty on failure — non-blocking)."""
+    # Inject the spec's business_logic as invariants the auditor must verify
+    business_logic = spec.get("business_logic", [])
+    invariants_block = ""
+    if business_logic:
+        rules = "\n".join(f"  - {r}" for r in business_logic)
+        invariants_block = (
+            f"\n## INVARIANTS THIS CONTRACT MUST UPHOLD (from spec)\n{rules}\n"
+            "For each invariant, check: can an attacker violate it? If yes, that's a critical finding.\n"
+        )
+
     user_prompt = (
-        f"## CONTRACT SPEC\n{json.dumps(spec, indent=2)[:2000]}\n\n"
+        f"## CONTRACT SPEC\n{json.dumps(spec, indent=2)[:2000]}\n"
+        f"{invariants_block}\n"
         f"## CONTRACT CODE ({framework})\n```typescript\n{contract_code[:6000]}\n```\n\n"
-        "Audit this contract. Report only confident, real security or logic issues as JSON."
+        "Attack this contract. Report only confident, exploitable security or logic issues as JSON."
     )
     try:
         response = await generate_completion(
@@ -327,6 +353,7 @@ async def run_llm_audit(contract_code: str, spec: dict, framework: str) -> list[
             user_prompt=user_prompt,
             temperature=0.0,
             max_tokens=1500,
+            caller="security_auditor",
         )
     except InvalidApiKeyError:
         raise
@@ -385,10 +412,27 @@ async def audit_contract(
     report.findings.extend(det_findings)
     report.checks_run = 4  # access, underflow, fund-recovery, payment-validation
 
-    # Decide whether to run LLM deep review
+    # Decide whether to run LLM deep review.
+    # Prefer the Architect's capability flags; fall back to code inspection.
     should_deep = deep_review
     if should_deep is None:
-        should_deep = template_type in FINANCIAL_TEMPLATES
+        caps = spec.get("capabilities") or {}
+        if caps:
+            should_deep = bool(
+                caps.get("is_financial")
+                or caps.get("uses_payments")
+                or caps.get("sends_funds")
+            )
+        else:
+            # Fallback: detect fund handling from the compiled code
+            handles_funds = (
+                "itxn.payment" in contract_code
+                or "itxn.assetTransfer" in contract_code.replace("AssetTransfer", "assetTransfer")
+                or "gtxn.PaymentTxn" in contract_code
+                or "gtxn.AssetTransferTxn" in contract_code
+                or "currentApplicationAddress" in contract_code
+            )
+            should_deep = template_type in FINANCIAL_TEMPLATES or handles_funds
 
     if should_deep:
         llm_findings = await run_llm_audit(contract_code, spec, framework)

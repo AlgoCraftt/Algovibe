@@ -235,6 +235,15 @@ MANDATORY IMPORT LINE (copy exactly — remove any symbol you do not use):
 import { Contract, GlobalState, LocalState, BoxMap, Box, abimethod, baremethod, uint64, bytes, Txn, Global, Uint64, Bytes, assert, Account, itxn, gtxn, clone } from '@algorandfoundation/algorand-typescript'
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+BOX STORAGE WARNING:
+Prefer GlobalState and LocalState over BoxMap/Box unless the spec EXPLICITLY requires box_storage.
+BoxMap requires the caller to pre-declare exact box key references in the transaction — the preview
+cannot predict dynamic keys, causing "invalid Box reference" errors. Use BoxMap ONLY when:
+  - The spec explicitly lists box_storage entries, AND
+  - You use BoxMap<Account, T> (key = sender address, which the bridge CAN resolve)
+  - NEVER use BoxMap<uint64, T> or BoxMap<bytes, T> with computed/sequential keys — these fail in preview.
+If LocalState can hold the same data (per-user values), prefer LocalState.
+
 CRITICAL ARC32 REQUIREMENT:
 You MUST use the @abimethod() decorator on EVERY public method that should be callable from the frontend. If you forget @abimethod(), the method will be hidden from the UI!
 
@@ -437,29 +446,61 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
 
     # ── Fix 1: Load ALL reference files ─────────────────────────────────────
 
-    def _load_skills(self, template_type: str = "") -> str:
+    def _load_skills(self, template_type: str = "", spec: Optional[dict] = None) -> str:
         """
-        Load ALL skill reference files for the active framework.
-        If template_type is x402_service, also load x402 TypeScript skills.
+        Load skill reference files RELEVANT to this contract's features.
+
+        Instead of loading every reference (context bloat), inspect the spec to
+        determine which references matter:
+          - storage.md         → always (every contract has state)
+          - types-and-values.md → always (core syntax)
+          - methods-and-abi.md  → always (ABI method rules)
+          - transactions.md     → only if the contract uses payments / inner txns / gtxn
         """
         framework_path = SKILLS_BASE / self.config["skill_path"]
         skill_contents = []
 
-        # 1. Primary SKILL.md
+        # Determine which references are relevant from the spec.
+        # Prefer the Architect's capability flags (single source of truth);
+        # fall back to structural heuristics if flags are absent.
+        spec = spec or {}
+        caps = spec.get("capabilities") or {}
+        if caps:
+            uses_transactions = bool(caps.get("uses_payments") or caps.get("sends_funds"))
+            uses_boxes = bool(caps.get("uses_box_storage"))
+        else:
+            spec_json = json.dumps(spec).lower()
+            uses_transactions = any(
+                kw in spec_json
+                for kw in ("pay", "payment", "withdraw", "transfer", "itxn", "gtxn",
+                           "asset", "claim", "refund", "deposit", "fund")
+            ) or template_type in ("x402_service", "escrow", "crowdfunding", "marketplace",
+                                    "token_vault", "lottery", "defi", "subscription")
+            uses_boxes = "box" in spec_json or bool(spec.get("box_storage"))
+
+        # Always-relevant references (core syntax every contract needs)
+        always_load = {"storage.md", "types-and-values.md", "methods-and-abi.md"}
+        # Conditionally-relevant references
+        conditional = {}
+        if uses_transactions:
+            conditional["transactions.md"] = True
+
+        # 1. Primary SKILL.md (always — it's the core rules)
         skill_main = framework_path / "SKILL.md"
         if skill_main.exists():
             skill_contents.append(f"## {self.framework.upper()} CORE RULES\n{skill_main.read_text(encoding='utf-8')}")
 
-        # 2. ALL reference docs in references/
+        # 2. Relevant reference docs only
         refs_dir = framework_path / "references"
         if refs_dir.exists():
             for ref_file in sorted(refs_dir.glob("*.md")):
                 if ref_file.name == "REFERENCE.md":
                     continue
-                section_title = f"REFERENCE: {ref_file.stem.upper().replace('-', ' ')}"
-                skill_contents.append(f"## {section_title}\n{ref_file.read_text(encoding='utf-8')}")
+                if ref_file.name in always_load or ref_file.name in conditional:
+                    section_title = f"REFERENCE: {ref_file.stem.upper().replace('-', ' ')}"
+                    skill_contents.append(f"## {section_title}\n{ref_file.read_text(encoding='utf-8')}")
 
-        # 3. Troubleshooting skill
+        # 3. Troubleshooting skill (always — it's the error catalog)
         trouble_main = SKILLS_BASE / "troubleshoot-errors" / "SKILL.md"
         if trouble_main.exists():
             skill_contents.append(f"## COMMON ERRORS & FIXES\n{trouble_main.read_text(encoding='utf-8')}")
@@ -470,11 +511,10 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
             x402_main = x402_path / "SKILL.md"
             if x402_main.exists():
                 skill_contents.append(f"## X402 PROTOCOL SKILL\n{x402_main.read_text(encoding='utf-8')}")
-            
+
             # Load ONLY the concise guide files (not the full examples which are huge)
             x402_refs = x402_path / "references"
             if x402_refs.exists():
-                # Only load the guides, NOT the full examples (too large for most models)
                 priority_files = [
                     "explain-algorand-x402-typescript.md",
                     "create-typescript-x402-server.md",
@@ -483,7 +523,6 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
                 for fname in priority_files:
                     fpath = x402_refs / fname
                     if fpath.exists():
-                        # Truncate each file to first 3000 chars to stay within context limits
                         content = fpath.read_text(encoding='utf-8')[:3000]
                         section_title = f"X402 REFERENCE: {fpath.stem.upper().replace('-', ' ')}"
                         skill_contents.append(f"## {section_title}\n{content}")
@@ -491,7 +530,10 @@ Follow ALL rules in the SKILLS section. Output ONLY the code — no explanation,
             logger.info("[ALGORAND_AGENT] Loaded x402 skill files for x402_service template")
 
         loaded = [s.split('\n')[0] for s in skill_contents]
-        logger.info(f"[ALGORAND_AGENT] Loaded {len(skill_contents)} skill sections: {loaded}")
+        logger.info(
+            f"[ALGORAND_AGENT] Loaded {len(skill_contents)} skill sections "
+            f"(transactions={uses_transactions}, boxes={uses_boxes}): {loaded}"
+        )
         return "\n\n---\n\n".join(skill_contents)
 
     # ── Fix 3: Error-specific retry corrections ──────────────────────────────
@@ -735,7 +777,7 @@ class {safe_name}(ARC4Contract):
           6. Verified few-shot examples (Solution B)
         """
         template_type = spec.get("template_type", "")
-        skills_context = self._load_skills(template_type=template_type)
+        skills_context = self._load_skills(template_type=template_type, spec=spec)
 
         full_system_prompt = (
             f"{self.config['system_prompt']}\n\n"
@@ -781,8 +823,9 @@ class {safe_name}(ARC4Contract):
         code = await generate_completion(
             system_prompt=full_system_prompt,
             user_prompt=prompt,
+            caller="algorand_agent",
             temperature=0.05,
-            max_tokens=4096,
+            max_tokens=8192,
         )
 
         if not code:
@@ -815,6 +858,24 @@ class {safe_name}(ARC4Contract):
 
         if not code:
             raise RuntimeError("Failed to extract code from LLM response")
+
+        # Fix #9: Spec-coverage check — warn if any spec method is missing from the code
+        try:
+            spec_methods = [m.get("name", "") for m in spec.get("methods", []) if m.get("name")]
+            # Convert snake_case spec names to also match camelCase in code
+            missing = []
+            for mname in spec_methods:
+                if mname in ("create", "createApplication"):
+                    continue  # lifecycle, named differently
+                camel = mname[0] + "".join(w.capitalize() for w in mname.split("_"))[1:] if "_" in mname else mname
+                if mname not in code and camel not in code:
+                    missing.append(mname)
+            if missing:
+                logger.warning(
+                    f"[ALGORAND_AGENT] Spec-coverage: {len(missing)} method(s) missing from generated code: {missing}"
+                )
+        except Exception as e:
+            logger.debug(f"[ALGORAND_AGENT] Spec-coverage check skipped: {e}")
 
         return {
             "contract_code": code,

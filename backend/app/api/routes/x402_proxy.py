@@ -161,16 +161,23 @@ async def x402_proxy(request: X402ProxyRequest) -> X402ProxyResponse:
             )
 
         # Run the x402 client script
-        result = await asyncio.to_thread(
-            subprocess.run,
-            [tsx_bin, script_path],
-            capture_output=True,
-            text=True,
-            cwd=script_dir,
-            env=env,
-            timeout=60,
-            shell=False,
-        )
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [tsx_bin, script_path],
+                capture_output=True,
+                text=True,
+                cwd=script_dir,
+                env=env,
+                timeout=60,
+                shell=False,
+            )
+        except subprocess.TimeoutExpired:
+            return X402ProxyResponse(
+                success=False,
+                error="x402 payment timed out after 60 seconds. Is the x402 server running?",
+                mode="error",
+            )
 
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()

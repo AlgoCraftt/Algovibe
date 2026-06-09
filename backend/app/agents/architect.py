@@ -24,20 +24,111 @@ class AnalysisResult(TypedDict):
     spec: dict
 
 
+# Templates that inherently handle value (used for is_financial fallback)
+_FINANCIAL_TEMPLATES = {
+    "escrow", "crowdfunding", "token_vault", "marketplace", "lottery",
+    "defi", "dao", "subscription", "x402_service", "token",
+}
+
+# Method-name hints for fund movement
+_FUND_OUT_HINTS = ("withdraw", "claim", "payout", "refund", "release", "distribute", "send", "transfer")
+_PAYMENT_ARG_TYPES = ("pay", "payment", "axfer", "asset")
+
+
+def derive_capabilities(spec: dict, template_type: str) -> dict:
+    """
+    Fallback capability derivation when the LLM omits or under-specifies the
+    capabilities block. Inspects the spec structurally so downstream agents
+    always have a reliable signal.
+    """
+    methods = spec.get("methods", []) or []
+    local_state = spec.get("local_state", []) or []
+    box_storage = spec.get("box_storage", []) or []
+
+    # uses_payments: any method takes a payment-type arg, or x402 (verifies gtxn)
+    uses_payments = template_type == "x402_service" or any(
+        str(a.get("type", "")).lower() in _PAYMENT_ARG_TYPES
+        for m in methods
+        for a in (m.get("args", []) or [])
+    )
+
+    # sends_funds: any method name hints at fund movement out
+    sends_funds = any(
+        any(h in str(m.get("name", "")).lower() for h in _FUND_OUT_HINTS)
+        for m in methods
+    )
+
+    uses_local_state = len(local_state) > 0
+    uses_box_storage = len(box_storage) > 0
+
+    is_financial = (
+        template_type in _FINANCIAL_TEMPLATES
+        or uses_payments
+        or sends_funds
+        or spec.get("x402_integration", False)
+    )
+
+    return {
+        "uses_payments": uses_payments,
+        "sends_funds": sends_funds,
+        "uses_local_state": uses_local_state,
+        "uses_box_storage": uses_box_storage,
+        "is_financial": is_financial,
+    }
+
+
+def ensure_capabilities(spec: dict, template_type: str) -> dict:
+    """
+    Merge LLM-provided capabilities with structural derivation.
+    Structural detection takes precedence for the safety-critical flags
+    (a method that sends funds MUST be flagged even if the LLM said false).
+    """
+    derived = derive_capabilities(spec, template_type)
+    llm_caps = spec.get("capabilities", {}) or {}
+
+    # OR-merge: if EITHER the LLM or structural detection flags it, it's true.
+    # This is the safe direction — over-detecting a capability is harmless,
+    # under-detecting (e.g. missing local_state opt-in) breaks the dApp.
+    merged = {}
+    for key, derived_val in derived.items():
+        merged[key] = bool(derived_val or llm_caps.get(key, False))
+    return merged
+
+
 ARCHITECT_SYSTEM_PROMPT = """You are the Architect Agent for AlgoCraft, a text-to-DApp engine for Algorand.
 
 Your job is to analyze user requests and create a SIMPLE, FOCUSED specification for an Algorand smart contract using the Puya compiler (Algorand Python/TypeScript).
 
 ## CRITICAL CONSTRAINTS — Algorand (Puya):
-- Keep contracts SMALL: 3-5 methods maximum (create + 2-3 core actions + 1-2 getters)
+- Keep contracts FOCUSED: include exactly the methods the feature needs — no more, no less.
+  Most apps need 3-6 methods (create + core actions + getters). Complex apps (escrow with
+  dispute, staged crowdfunding) may need more — that's fine. Do NOT pad with admin/pause/
+  upgrade methods the user didn't ask for.
 - Algorand/Puya types: uint64, bytes, str, bool, Address
+- Special argument types: "pay" (a grouped ALGO payment txn), "asset" (an ASA reference)
 - Use uint64 for all numeric values and amounts
 - NO floating point.
 - State types:
   - global_state: list of {name, type, description}
   - local_state: list of {name, type, description} (per-user)
   - box_storage: list of {name, key_type, value_type} (dynamic data)
+    IMPORTANT: Box storage requires the caller to pre-declare box references in the transaction.
+    Use box_storage ONLY when GlobalState/LocalState are insufficient (e.g. storing per-user records
+    for unlimited users, large data blobs). For simple counters, flags, or limited user data,
+    prefer global_state or local_state — they work without extra transaction configuration.
 - Methods: list of {name, args: [{name, type}], returns: type, description, on_complete}
+
+## SCOPE DISCIPLINE:
+- Model ONLY what the user explicitly asked for. Do not infer or add features they didn't mention.
+- If the user says "a counter", build a counter — don't add access control, pausing, or admin roles.
+
+## RELIABILITY ENVELOPE (prefer patterns that work end-to-end):
+- STRONGLY PREFER global_state and local_state over box_storage. They cover counters, balances,
+  per-user records, flags, votes, ownership — the vast majority of apps.
+- Use box_storage ONLY when the data is genuinely unbounded (e.g. an unlimited registry of
+  arbitrary-length entries). If local_state (per-user) can hold it, use local_state.
+- For payments, use native ALGO ("pay" arg type) — it works without ASA opt-in friction.
+- Keep methods ABI-callable (@abimethod) so the frontend can wire buttons to them.
 
 ## Design Philosophy:
 - Every method should map directly to a user action in the UI
@@ -140,16 +231,30 @@ Respond with ONLY a JSON object:
       }
     ],
     "ui_requirements": ["..."],
-    "business_logic": ["..."]
+    "business_logic": ["..."],
+    "capabilities": {
+      "uses_payments": false,
+      "sends_funds": false,
+      "uses_local_state": false,
+      "uses_box_storage": false,
+      "is_financial": false
+    }
   }
-}"""
+}
+
+## CAPABILITIES — set these flags accurately (downstream agents rely on them):
+- "uses_payments": true if any method accepts an ALGO/ASA payment (a "pay" arg, or verifies gtxn payment)
+- "sends_funds": true if the contract sends funds OUT (withdraw, claim, payout, refund — uses inner transactions)
+- "uses_local_state": true if local_state has any entries (requires per-user opt-in)
+- "uses_box_storage": true if box_storage has any entries
+- "is_financial": true if the contract holds, moves, or accounts for value (payments, balances, tokens)"""
 
 
 ARCHITECT_USER_PROMPT = """User request: {prompt}
 
-Create a SIMPLE contract spec for Algorand using Puya. Remember:
-- Maximum 5 methods
-- Types: uint64, bytes, str, bool, Address
+Create a FOCUSED contract spec for Algorand using Puya. Remember:
+- Include exactly the methods the feature needs (no padding, no inventing features)
+- Types: uint64, bytes, str, bool, Address; special args: "pay", "asset"
 - template_type MUST be one of: token_vault, crowdfunding, voting, nft, escrow, marketplace, subscription, lottery, counter, transfer, game, token, defi, dao, x402_service, custom
 - If the user mentions x402, pay-per-call, paid API, micropayments, or agentic commerce → use "x402_service" and include "x402_integration": true in the spec
 
@@ -165,6 +270,7 @@ async def analyze_prompt(prompt: str) -> AnalysisResult:
     response = await generate_completion(
         system_prompt=ARCHITECT_SYSTEM_PROMPT,
         user_prompt=ARCHITECT_USER_PROMPT.format(prompt=prompt),
+        caller="architect",
         temperature=0.1,
         max_tokens=4000,
     )
@@ -186,10 +292,17 @@ async def analyze_prompt(prompt: str) -> AnalysisResult:
             if "template_type" not in data or "spec" not in data:
                 logger.error(f"[ARCHITECT] Missing required keys. Response: {response}")
                 raise RuntimeError("Architect returned an incomplete specification")
-                
+
+            template_type = data["template_type"]
+            spec = data["spec"]
+
+            # Ensure capabilities are present and accurate (single source of truth)
+            spec["capabilities"] = ensure_capabilities(spec, template_type)
+            logger.info(f"[ARCHITECT] Capabilities: {spec['capabilities']}")
+
             return AnalysisResult(
-                template_type=data["template_type"],
-                spec=data["spec"]
+                template_type=template_type,
+                spec=spec
             )
         else:
             logger.error(f"[ARCHITECT] No JSON found in response: {response}")

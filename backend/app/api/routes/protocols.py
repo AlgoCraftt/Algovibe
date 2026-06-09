@@ -126,6 +126,7 @@ Suggest 2-3 protocols from the list above. Return ONLY the JSON array:"""
                 user_prompt=user_prompt,
                 temperature=0.3,
                 max_tokens=2048,
+                caller="protocols_suggest",
             )
 
         json_match = re.search(r'\[[\s\S]*\]', response)
