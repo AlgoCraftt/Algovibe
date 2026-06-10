@@ -4,6 +4,7 @@ import { isLlmConfigured } from './llm-settings'
 import { patchPreviewBridgeFiles } from './preview-bridge-hooks'
 import { patchGeneratedFrontendFiles } from './fix-use-contract'
 import { formatBuildLog } from './build-log-format'
+import { saveProject, getProject, type ProjectRecord } from './project-history'
 
 export type BuildStep =
   | 'idle'
@@ -113,6 +114,7 @@ interface AlgoCraftStore {
   setContractId: (id: string) => void
   setError: (error: string | null) => void
   setPreviewError: (error: string | null) => void
+  loadProject: (projectId: string) => void
   loadTestFiles: () => void
   setWalletAddress: (address: string | null) => void
   setPendingSignature: (data: { unsigned_tx: string; buildId: string; framework?: string; approval_teal?: string; clear_teal?: string; arc32_spec?: any } | null) => void
@@ -317,6 +319,20 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
           previewError: null,
           previewRevision: s.previewRevision + 1,
         }))
+        // Auto-save after fix
+        const afterFix = get()
+        if (Object.keys(afterFix.generatedFiles).length > 0) {
+          const userMsg = afterFix.messages.find((m) => m.role === 'user')
+          saveProject({
+            prompt: userMsg?.content || 'Untitled project',
+            templateType: afterFix.templateType,
+            contractId: afterFix.contractId,
+            framework: 'puyats',
+            files: afterFix.generatedFiles,
+            arc32Spec: afterFix.arc32Spec,
+            contractSpec: afterFix.contractSpec,
+          })
+        }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
         setError(errorMessage)
@@ -456,6 +472,21 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
     } else {
       set({ isBuilding: false })
     }
+
+    // Auto-save completed project to history
+    const finalState = get()
+    if (finalState.buildStatus === 'complete' && Object.keys(finalState.generatedFiles).length > 0) {
+      const userMsg = finalState.messages.find((m) => m.role === 'user')
+      saveProject({
+        prompt: userMsg?.content || 'Untitled project',
+        templateType: finalState.templateType,
+        contractId: finalState.contractId,
+        framework: 'puyats',
+        files: finalState.generatedFiles,
+        arc32Spec: finalState.arc32Spec,
+        contractSpec: finalState.contractSpec,
+      })
+    }
   },
 
   deployToVercel: async () => {
@@ -527,6 +558,39 @@ export const useAlgoCraftStore = create<AlgoCraftStore>((set, get) => ({
         return p ? { id: p.id, name: p.name, icon: p.icon } : null
       })
       .filter((p): p is { id: string; name: string; icon: string } => p !== null)
+  },
+
+  loadProject: (projectId: string) => {
+    const project = getProject(projectId)
+    if (!project) return
+    set({
+      messages: [
+        {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: project.prompt,
+          timestamp: new Date(project.createdAt),
+        },
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: 'Your DApp is ready! Check the preview panel.',
+          timestamp: new Date(project.createdAt),
+        },
+      ],
+      buildStatus: 'complete',
+      buildLogs: [`Loaded project from ${new Date(project.createdAt).toLocaleDateString()}`],
+      generatedFiles: project.files,
+      contractId: project.contractId,
+      arc32Spec: project.arc32Spec,
+      contractSpec: project.contractSpec,
+      templateType: project.templateType,
+      isBuilding: false,
+      error: null,
+      previewError: null,
+      previewRevision: 0,
+      pendingSignature: null,
+    })
   },
 
   loadTestFiles: () => {

@@ -524,16 +524,45 @@ export function BridgeHandler() {
         boxRefs.push({ appIndex: 0, name: new Uint8Array(0) })
       }
 
+      // ─── Auto-detect foreign accounts ────────────────────────────────────
+      // Algorand requires all accounts referenced in inner transactions to be in
+      // the transaction's foreign accounts array. ATC handles `account`-typed ABI
+      // args automatically, but contracts often use string/address args in inner
+      // txns (e.g. sending funds to a receiver). We scan all raw args for valid
+      // Algorand addresses and add them as appAccounts to prevent
+      // "unavailable Account" errors at runtime.
+      const foreignAccounts: string[] = []
+      const appAddress = algosdk.getApplicationAddress(Number(payload.appId)).toString()
+      for (const rawArg of payload.args) {
+        if (typeof rawArg === 'string' && rawArg.length === 58) {
+          try {
+            algosdk.decodeAddress(rawArg) // throws if not a valid address
+            // Don't add sender or app address (already available to the AVM)
+            if (rawArg !== activeAddress && rawArg !== appAddress) {
+              foreignAccounts.push(rawArg)
+            }
+          } catch {
+            // Not a valid address — skip
+          }
+        }
+      }
+
       // Add method call to ATC
+      // If foreign accounts are detected (likely inner txns), increase fee budget
+      // to cover inner transaction fees (each inner txn needs ~0.001 ALGO)
+      const baseFee = Number(params.fee) || 1000
+      const txnFee = foreignAccounts.length > 0 ? baseFee * (foreignAccounts.length + 1) : baseFee
+
       atc.addMethodCall({
         appID: Number(payload.appId),
         method,
         methodArgs,
         sender: activeAddress as string,
         signer: transactionSigner,
-        suggestedParams: { ...params, fee: params.fee || 1000, flatFee: true },
+        suggestedParams: { ...params, fee: txnFee, flatFee: true },
         onComplete,
         boxes: boxRefs,
+        ...(foreignAccounts.length > 0 ? { appAccounts: foreignAccounts } : {}),
       } as any)
 
       // Execute via ATC — handles grouping, signing, and submission

@@ -5,6 +5,7 @@ import Image from 'next/image'
 import { motion } from 'framer-motion'
 import { PromptInputBox } from '@/components/ui/prompt-box'
 import { ProtocolChips } from './ProtocolChips'
+import { ProjectHistory } from './ProjectHistory'
 import { useAlgoCraftStore } from '@/lib/store'
 
 export function EmptyState() {
@@ -18,7 +19,7 @@ export function EmptyState() {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center w-full max-w-3xl px-6 py-12 text-center animate-fade-in-up">
+    <div className="flex flex-col items-center w-full max-w-3xl px-6 py-12 text-center animate-fade-in-up overflow-y-auto max-h-full">
       <motion.div
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -72,6 +73,9 @@ export function EmptyState() {
         </p>
         <ProtocolChips onSelect={(text: string) => handleSend(text)} />
       </motion.div>
+
+      {/* Recent projects — shown below templates */}
+      <ProjectHistory />
     </div>
   )
 }
